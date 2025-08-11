@@ -1,0 +1,27 @@
+# Virtual environments
+.venv/
+venv/
+
+# Env files (keep the example!)
+.env
+.env.*
+!.env.example
+
+# Python cruft
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build / test artifacts
+dist/
+build/
+.eggs/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/

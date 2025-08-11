@@ -1,0 +1,79 @@
+openapi: 3.0.1
+info:
+  title: Research Agent API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Local server
+paths:
+  /eig/find_auctions:
+    get:
+      summary: Find auctions within a date range.
+      parameters:
+        - name: start_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Auction list
+  /eig/parse_event_days:
+    get:
+      summary: Parse all lots from an auction event day.
+      parameters:
+        - name: event_url
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lots data
+  /searchland/lookup:
+    get:
+      summary: Lookup property ownership and sale data.
+      parameters:
+        - name: address
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: postcode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: auction_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Lookup results
+  /sheet/upsert_rows:
+    post:
+      summary: Append or update rows in Google Sheets.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        "200":
+          description: Success
