@@ -429,19 +429,24 @@ def extract_auction_results_table(page):
     try:
         # Look for tables with "Result" column
         tables = page.query_selector_all("table")
-        for table in tables:
+        print(f"    🔍 Found {len(tables)} tables on the auction page")
+        for i, table in enumerate(tables):
+            print(f"    📋 Processing table {i+1}/{len(tables)}")
             # Check if this table has a "Result" column
             headers = table.query_selector_all("th, td")
             result_column_index = -1
             lot_column_index = -1
             
             # Find the "Result" and "Lot No" columns
-            for i, header in enumerate(headers):
+            print(f"    📋 Table {i+1} headers: {[h.text_content().strip() for h in headers[:5]]}...")
+            for j, header in enumerate(headers):
                 header_text = header.text_content().strip().lower()
                 if "result" in header_text:
-                    result_column_index = i
+                    result_column_index = j
+                    print(f"    ✅ Found 'Result' column at index {j}")
                 elif "lot" in header_text and "no" in header_text:
-                    lot_column_index = i
+                    lot_column_index = j
+                    print(f"    ✅ Found 'Lot No' column at index {j}")
             
             if result_column_index >= 0 and lot_column_index >= 0:
                 # Extract data from each row
@@ -1198,9 +1203,9 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                     print(f"   Processing lot {j+1}/{len(lots)}: {lot.get('address', 'No address')}")
                     print(f"   Lot property_prices_status: {lot.get('property_prices_status', 'NOT SET')}")
                     
-                    # Only import lots that were successfully found in property prices database
-                    if lot.get('property_prices_status') == 'found':
-                        print(f"   🎯 MATCH FOUND! Importing lot {j+1}...")
+                    # Import lots that have price_bought data (regardless of property prices status)
+                    if lot.get('price_bought') and lot.get('price_bought').strip():
+                        print(f"   🎯 PRICE FOUND! Importing lot {j+1} with price_bought: {lot.get('price_bought')}...")
                         
                         property_data = {
                             'auction_name': auction.get('name', ''),
@@ -1239,7 +1244,7 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                             total_skipped += 1
                             print(f"   ❌ Error importing lot {j+1}: {e}")
                     else:
-                        print(f"   ⏭️ Lot {j+1} skipped - no property prices match found")
+                        print(f"   ⏭️ Lot {j+1} skipped - no price_bought data found")
                         total_skipped += 1
                     
                     # Add small delay between lots
