@@ -24,7 +24,7 @@ class PropertyDataManagerWebApp:
             webapp_url: Google Apps Script web app URL
             shared_token: Shared token for authentication
         """
-        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbyp2RXahUVgZW9xMJyVYdCuyOcBoVqfpN_XeOQF91s8GjryvAakoCB2FdqVvlQ9Vtd2/exec"
+        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbwo75UhZlX317Vo2_pzjJddtPvrbEJKR-mrzqCj-oVFEdUMJHYwtKMb7Upw0QdM7CG8/exec"
         self.shared_token = shared_token or os.getenv('GOOGLE_SHEETS_SHARED_TOKEN')
         
         # Fallback to local JSON file
@@ -79,7 +79,7 @@ class PropertyDataManagerWebApp:
                     'auction_name': property_data.get('auction_name', ''),
                     'auction_date': property_data.get('auction_date', ''),
                     'address': property_data.get('address', ''),
-                    'price_bought': property_data.get('price_bought', ''),
+                    'price-bought': property_data.get('price_bought', ''),
                     'lot_number': property_data.get('lot_number', ''),
                     'postcode': property_data.get('postcode', ''),
                     'sold_price': property_data.get('sold_price', ''),

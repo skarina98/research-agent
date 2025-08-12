@@ -1146,13 +1146,83 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
         print(f"Error extracting lot data from page: {e}")
         return None
 
+def get_processed_auctions(sheets_manager):
+    """
+    Get list of auctions that have already been processed
+    by checking the Google Sheet for existing auction dates
+    
+    Args:
+        sheets_manager: PropertyDataManager instance
+        
+    Returns:
+        Set of auction dates that have been processed
+    """
+    processed_auctions = set()
+    
+    try:
+        # Get existing data from the sheet
+        existing_data = sheets_manager.property_data
+        
+        # Extract auction dates from existing data
+        for property_data in existing_data:
+            auction_date = property_data.get('auction_date', '')
+            auction_name = property_data.get('auction_name', '')
+            if auction_date and auction_name:
+                # Create a unique key for each auction
+                auction_key = f"{auction_name}_{auction_date}"
+                processed_auctions.add(auction_key)
+        
+        # Also try to read from Google Sheet directly if available
+        try:
+            import requests
+            webapp_url = sheets_manager.webapp_url
+            shared_token = sheets_manager.shared_token
+            
+            if webapp_url and shared_token:
+                payload = {
+                    'token': shared_token,
+                    'action': 'read',
+                    'sheet_id': os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q')
+                }
+                
+                response = requests.post(webapp_url, json=payload, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('ok') and result.get('rows'):
+                        for row in result.get('rows', []):
+                            auction_date = row.get('auction_date', '')
+                            auction_name = row.get('auction_name', '')
+                            if auction_date and auction_name:
+                                auction_key = f"{auction_name}_{auction_date}"
+                                processed_auctions.add(auction_key)
+                        print(f"📊 Also found {len(result.get('rows', []))} rows from Google Sheet")
+        except Exception as e:
+            print(f"⚠️ Could not read from Google Sheet directly: {e}")
+        
+        print(f"📊 Found {len(processed_auctions)} already processed auctions")
+        
+        # Show some examples of processed auctions
+        if processed_auctions:
+            print(f"📋 Examples of processed auctions:")
+            for i, auction_key in enumerate(list(processed_auctions)[:5]):
+                print(f"   - {auction_key}")
+            if len(processed_auctions) > 5:
+                print(f"   ... and {len(processed_auctions) - 5} more")
+        
+        return processed_auctions
+        
+    except Exception as e:
+        print(f"⚠️ Error getting processed auctions: {e}")
+        return set()
+
 def process_auctions_to_sheets(start_date: str, end_date: str):
     """
     Main workflow function that:
     1. Finds auctions in the date range
-    2. Extracts property listings from each auction
-    3. Imports each lot immediately to sheets after processing
-    4. Provides real-time progress tracking
+    2. Checks which auctions have already been processed
+    3. Extracts property listings from new auctions only
+    4. Imports each lot immediately to sheets after processing
+    5. Provides real-time progress tracking
     
     Args:
         start_date: Start date in YYYY-MM-DD format
@@ -1165,8 +1235,15 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
     
     print(f"=== PROCESSING AUCTIONS FROM {start_date} TO {end_date} ===")
     
-    # Step 1: Find auctions
-    print("\n1. Finding auctions...")
+    # Initialize sheets manager
+    sheets_manager = PropertyDataManager()
+    
+    # Step 1: Get already processed auctions
+    print("\n1. Checking already processed auctions...")
+    processed_auctions = get_processed_auctions(sheets_manager)
+    
+    # Step 2: Find auctions
+    print("\n2. Finding auctions...")
     auctions = find_auctions(start_date, end_date)
     print(f"Found {len(auctions)} auctions")
     
@@ -1176,16 +1253,39 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
             "message": "No auctions found in the specified date range"
         }
     
-    # Initialize sheets manager
-    sheets_manager = PropertyDataManager()
+    # Step 3: Filter out already processed auctions
+    new_auctions = []
+    skipped_auctions = []
     
-    # Step 2: Process each auction and import lots immediately
+    for auction in auctions:
+        auction_key = f"{auction.get('name', 'Unknown')}_{auction.get('date', '')}"
+        if auction_key in processed_auctions:
+            skipped_auctions.append(auction)
+            print(f"   ⏭️ Skipping already processed auction: {auction.get('name', 'Unknown')} on {auction.get('date', 'Unknown')}")
+        else:
+            new_auctions.append(auction)
+    
+    print(f"\n📊 Auction Summary:")
+    print(f"   ✅ New auctions to process: {len(new_auctions)}")
+    print(f"   ⏭️ Already processed (skipped): {len(skipped_auctions)}")
+    
+    if not new_auctions:
+        print("🎉 All auctions in this date range have already been processed!")
+        return {
+            "status": "already_processed",
+            "message": "All auctions in the specified date range have already been processed",
+            "total_imported": 0,
+            "total_skipped": 0,
+            "total_lots_found": 0
+        }
+    
+    # Step 4: Process each new auction and import lots immediately
     total_imported = 0
     total_skipped = 0
     total_lots_found = 0
     
-    for i, auction in enumerate(auctions):
-        print(f"\n2.{i+1}. Processing auction {i+1}/{len(auctions)}: {auction.get('name', 'Unknown')}")
+    for i, auction in enumerate(new_auctions):
+        print(f"\n2.{i+1}. Processing auction {i+1}/{len(new_auctions)}: {auction.get('name', 'Unknown')}")
         
         if auction.get('detail_url'):
             try:
@@ -1269,9 +1369,11 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
             print(f"   No detail URL available for auction {i+1}")
     
     # Summary
-    print(f"\n📊 Import Summary:")
+    print(f"\n📊 Final Summary:")
     print(f"   ✅ Total imported: {total_imported}")
     print(f"   ⏭️ Total skipped: {total_skipped}")
+    print(f"   🎯 Auctions processed: {len(new_auctions)}")
+    print(f"   ⏭️ Auctions skipped (already processed): {len(skipped_auctions)}")
     print(f"   📈 Success rate: {total_imported/(total_imported+total_skipped)*100:.1f}%" if (total_imported+total_skipped) > 0 else "   📈 Success rate: 0%")
     
     return {
@@ -1279,5 +1381,7 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
         "total_imported": total_imported,
         "total_skipped": total_skipped,
         "total_lots_found": total_lots_found,
-        "message": f"Imported {total_imported} properties, skipped {total_skipped}"
+        "auctions_processed": len(new_auctions),
+        "auctions_skipped": len(skipped_auctions),
+        "message": f"Imported {total_imported} properties, processed {len(new_auctions)} auctions, skipped {len(skipped_auctions)} already processed auctions"
     }
