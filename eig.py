@@ -284,6 +284,7 @@ def parse_event_days(event_url: str, auction_name: str = "", auction_date: str =
         print("Extracting auction results table...")
         auction_results = extract_auction_results_table(page)
         print(f"Extracted auction results: {auction_results}")
+        print(f"Debug: auction_results keys: {list(auction_results.keys())}")
         
         print(f"Page title: {page.title()}")
         print(f"Page URL: {page.url}")
@@ -972,6 +973,7 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
         
         # Extract price bought from the auction results table
         # First try to get it from the auction results table we extracted earlier
+        print(f"    🔍 Debug: Looking for lot_number '{lot_data['lot_number']}' in auction_results keys: {list(auction_results.keys())}")
         if auction_results and lot_data['lot_number'] in auction_results:
             result_text = auction_results[lot_data['lot_number']]
             import re

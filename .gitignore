@@ -24,5 +24,5 @@ build/
 # OS / IDE
 .DS_Store
 .vscode/
-.idea/token.json
+token.json
 oauth_credentials.json
