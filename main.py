@@ -53,3 +53,21 @@ def post_insight(payload: InsightPayload):
         return {"status": "error", "message": response.text}
 
     return {"status": "success", "message": "Insight posted successfully"}
+
+@app.get("/sheet/data", operation_id="get_sheet_data")
+def get_sheet_data():
+    SHEETS_GET_URL = os.getenv("SHEETS_GET_URL")
+    if not SHEETS_GET_URL:
+        return {"status": "error", "message": "Missing SHEETS_GET_URL in environment"}
+
+    response = requests.get(SHEETS_GET_URL)
+
+    if not response.ok:
+        return {"status": "error", "message": response.text}
+
+    try:
+        data = response.json()
+    except Exception as e:
+        return {"status": "error", "message": f"Invalid JSON: {e}"}
+
+    return data

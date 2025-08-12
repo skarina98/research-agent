@@ -24,7 +24,7 @@ class PropertyDataManagerWebApp:
             webapp_url: Google Apps Script web app URL
             shared_token: Shared token for authentication
         """
-        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbwo75UhZlX317Vo2_pzjJddtPvrbEJKR-mrzqCj-oVFEdUMJHYwtKMb7Upw0QdM7CG8/exec"
+        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbyjCzf8CA1FmK_zY3aaeYkuqXbNHS8Rm9xn7Im2LTRRtr0ftk5xNH44J1z_v7k3pztM/exec"
         self.shared_token = shared_token or os.getenv('GOOGLE_SHEETS_SHARED_TOKEN')
         
         # Fallback to local JSON file
@@ -79,10 +79,10 @@ class PropertyDataManagerWebApp:
                     'auction_name': property_data.get('auction_name', ''),
                     'auction_date': property_data.get('auction_date', ''),
                     'address': property_data.get('address', ''),
-                    'price-bought': property_data.get('price_bought', ''),
+                    'auction_sale': property_data.get('auction_sale', ''),
                     'lot_number': property_data.get('lot_number', ''),
                     'postcode': property_data.get('postcode', ''),
-                    'sold_price': property_data.get('sold_price', ''),
+                    'purchase_price': property_data.get('purchase_price', ''),
                     'sold_date': property_data.get('sold_date', ''),
                     'owner': '',  # Not provided in our data
                     'guide_price': '',  # Leave guide_price empty as requested

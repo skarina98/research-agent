@@ -1,0 +1,5 @@
+2025/08/11-19:52:40.468 1d6d0a9 Creating DB /Users/karinasavoie/kalro-ai/research-agent/sessions/eig/Default/Local Storage/leveldb since it was missing.
+2025/08/11-19:52:40.472 1d6d0a9 Reusing MANIFEST /Users/karinasavoie/kalro-ai/research-agent/sessions/eig/Default/Local Storage/leveldb/MANIFEST-000001
+2025/08/11-19:56:01.408 1d6d0ab Level-0 table #5: started
+2025/08/11-19:56:01.411 1d6d0ab Level-0 table #5: 47388 bytes OK
+2025/08/11-19:56:01.412 1d6d0ab Delete type=0 #3

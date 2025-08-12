@@ -696,8 +696,8 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
         lot_data = {
             'lot_number': str(lot_number),  # Default to sequential number
             'address': '',
-            'price_bought': '',
-            'sold_price': '',
+            'auction_sale': '',
+            'purchase_price': '',
             'sale_date': '',
             'postcode': '',
             'found_in_prices': False
@@ -983,15 +983,15 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
             result_text = auction_results[lot_data['lot_number']]
             import re
             
-            # Look for "Sold for £X" format
+            # Look for "Sold for £X" format - capture actual prices
             sold_for_match = re.search(r'Sold\s+for\s+£([\d,]+(?:,\d{3})*)', result_text, re.IGNORECASE)
             if sold_for_match:
-                lot_data['price_bought'] = f"£{sold_for_match.group(1)}"
-                print(f"    📍 Found price from auction results table: {lot_data['price_bought']}")
+                lot_data['auction_sale'] = f"£{sold_for_match.group(1)}"
+                print(f"    📍 Found price from auction results table: {lot_data['auction_sale']}")
             else:
-                # Use the full result text (for status like "Sold prior to auction for an undisclosed amount.")
-                lot_data['price_bought'] = result_text
-                print(f"    📍 Found status from auction results table: {lot_data['price_bought']}")
+                # Capture the full result text as-is (for status like "Reserved", "Withdrawn Prior", etc.)
+                lot_data['auction_sale'] = result_text
+                print(f"    📍 Captured status text from auction results table: {lot_data['auction_sale']}")
         else:
             # Fallback: Look for tables with "Result" column that contains "Sold for £X" or status
             price_bought_selectors = [
@@ -1038,30 +1038,36 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
                                         # Look for "Sold for £X" format
                                         sold_for_match = re.search(r'Sold\s+for\s+£([\d,]+(?:,\d{3})*)', result_cell, re.IGNORECASE)
                                         if sold_for_match:
-                                            lot_data['price_bought'] = f"£{sold_for_match.group(1)}"
+                                            lot_data['auction_sale'] = f"£{sold_for_match.group(1)}"
                                             price_bought_found = True
-                                            print(f"    📍 Found price from results table: {lot_data['price_bought']}")
+                                            print(f"    📍 Found price from results table: {lot_data['auction_sale']}")
                                             break
                                         
-                                        # Look for status patterns
-                                        status_patterns = [
-                                            r'(Sold\s+prior\s+to\s+auction\s+for\s+an\s+undisclosed\s+amount\.?)',
-                                            r'(Withdrawn\s+Prior\.?)',
-                                            r'(Sold\s+Prior\.?)',
-                                            r'(Reserved\.?)',
-                                            r'(Withdrawn\.?)',
-                                            r'(Sold\.?)'
+                                        # Look for price patterns first
+                                        price_patterns = [
+                                            r'£([\d,]+(?:,\d{3})*)',  # Standard price format like £185,000
+                                            r'Sold\s+at\s+£([\d,]+(?:,\d{3})*)',  # "Sold at £X"
+                                            r'Price\s+£([\d,]+(?:,\d{3})*)',  # "Price £X"
                                         ]
                                         
-                                        for pattern in status_patterns:
+                                        price_found = False
+                                        for pattern in price_patterns:
                                             match = re.search(pattern, result_cell, re.IGNORECASE)
                                             if match:
-                                                lot_data['price_bought'] = match.group(1)
+                                                lot_data['auction_sale'] = f"£{match.group(1)}"
                                                 price_bought_found = True
-                                                print(f"    📍 Found status from results table: {lot_data['price_bought']}")
+                                                print(f"    📍 Found price from results table: {lot_data['auction_sale']}")
+                                                price_found = True
                                                 break
                                         
-                                        if price_bought_found:
+                                        if price_found:
+                                            break
+                                        
+                                        # If no price found, capture the full result text as-is
+                                        if result_cell and result_cell.strip():
+                                            lot_data['auction_sale'] = result_cell.strip()
+                                            price_bought_found = True
+                                            print(f"    📍 Captured status text from results table: {lot_data['auction_sale']}")
                                             break
                         
                         if price_bought_found:
@@ -1079,30 +1085,42 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
                 page_text = lot_page.locator("body").text_content()
                 if page_text:
                     import re
-                    # Look for price bought patterns in the page text
+                    # Look for price patterns first, then capture any text as-is
                     price_patterns = [
                         r'Sold\s+for\s+£([\d,]+(?:,\d{3})*)',  # "Sold for £306,000"
-                        r'£([\d,]+(?:,\d{3})*)',                # Standard price format like £185,000
+                        r'Sold\s+at\s+£([\d,]+(?:,\d{3})*)',   # "Sold at £X"
+                        r'Price\s+£([\d,]+(?:,\d{3})*)',       # "Price £X"
+                        r'£([\d,]+(?:,\d{3})*)',               # Standard price format like £185,000
                         r'Guide.*?£([\d,]+(?:,\d{3})*)',
                         r'Estimate.*?£([\d,]+(?:,\d{3})*)',
-                        r'Price.*?£([\d,]+(?:,\d{3})*)',
-                        r'(Withdrawn\s+Prior\.?)',    # Withdrawn status
-                        r'(Sold\s+Prior\.?)',         # Sold prior status
-                        r'(Reserved\.?)',             # Reserved status
-                        r'(Withdrawn\.?)',            # Just Withdrawn
-                        r'(Sold\.?)'                  # Just Sold
                     ]
                     
+                    price_found = False
                     for pattern in price_patterns:
                         match = re.search(pattern, page_text, re.IGNORECASE)
                         if match:
-                            if '£' in pattern:
-                                lot_data['price_bought'] = f"£{match.group(1)}"
-                            else:
-                                lot_data['price_bought'] = match.group(1)
+                            lot_data['auction_sale'] = f"£{match.group(1)}"
                             price_bought_found = True
-                            print(f"    📍 Found price bought from page text: {lot_data['price_bought']}")
+                            print(f"    📍 Found auction sale from page text: {lot_data['auction_sale']}")
+                            price_found = True
                             break
+                    
+                    # If no price found, look for auction-related text to capture as-is
+                    if not price_found:
+                        auction_keywords = ['sold', 'withdrawn', 'reserved', 'unsold', 'passed', 'cancelled', 'postponed', 'adjourned', 'auction', 'lot']
+                        for keyword in auction_keywords:
+                            # Look for any text containing these keywords
+                            keyword_pattern = rf'([^.]*{keyword}[^.]*)'
+                            matches = re.findall(keyword_pattern, page_text, re.IGNORECASE)
+                            for match in matches:
+                                match_text = match.strip()
+                                if len(match_text) > 5 and len(match_text) < 100:  # Reasonable length
+                                    lot_data['auction_sale'] = match_text
+                                    price_bought_found = True
+                                    print(f"    📍 Captured auction-related text: {lot_data['auction_sale']}")
+                                    break
+                            if price_bought_found:
+                                break
             except Exception as e:
                 print(f"    ⚠️ Error extracting price bought from page text: {e}")
         
@@ -1120,7 +1138,7 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
                 # Update lot data with property prices data
                 lot_data['postcode'] = property_data.get('postcode', lot_data['postcode'])
                 lot_data['sale_date'] = property_data.get('sale_date', '')
-                lot_data['sold_price'] = property_data.get('sale_price', '')  # Actual sold price from property prices database
+                lot_data['purchase_price'] = property_data.get('sale_price', '')  # Actual purchase price from property prices database
                 
                 # Keep the original price_bought from the auction listing
                 # The sold_price from property prices database is separate
@@ -1130,14 +1148,14 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
                 lot_data['property_prices_postcode'] = property_data.get('postcode', '')
                 lot_data['property_prices_sale_date'] = property_data.get('sale_date', '')
                 lot_data['property_prices_sale_price'] = property_data.get('sale_price', '')
-                print(f"  ✅ Lot {lot_data['lot_number']}: {lot_data['address']} - Price Bought: {lot_data['price_bought']}, Sold: {lot_data['sold_price']} (found in property prices)")
+                print(f"  ✅ Lot {lot_data['lot_number']}: {lot_data['address']} - Auction Sale: {lot_data['auction_sale']}, Purchase Price: {lot_data['purchase_price']} (found in property prices)")
             else:
                 # Address not found in property prices - still return the lot data
                 lot_data['property_prices_status'] = 'not_found'
                 lot_data['property_prices_postcode'] = ''
                 lot_data['property_prices_sale_date'] = ''
                 lot_data['property_prices_sale_price'] = ''
-                print(f"  📝 Lot {lot_data['lot_number']}: {lot_data['address']} - Price Bought: {lot_data['price_bought']}, Sold: Not found (will still be imported)")
+                print(f"  📝 Lot {lot_data['lot_number']}: {lot_data['address']} - Auction Sale: {lot_data['auction_sale']}, Purchase Price: Not found")
         
         # Always return the lot data, regardless of property prices status
         return lot_data
@@ -1303,18 +1321,18 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                     print(f"   Processing lot {j+1}/{len(lots)}: {lot.get('address', 'No address')}")
                     print(f"   Lot property_prices_status: {lot.get('property_prices_status', 'NOT SET')}")
                     
-                    # Import lots that have price_bought data (regardless of property prices status)
-                    if lot.get('price_bought') and lot.get('price_bought').strip():
-                        print(f"   🎯 PRICE FOUND! Importing lot {j+1} with price_bought: {lot.get('price_bought')}...")
+                    # Import lots that have BOTH auction_sale data AND purchase_price data
+                    if lot.get('auction_sale') and lot.get('auction_sale').strip() and lot.get('purchase_price') and lot.get('purchase_price').strip():
+                        print(f"   🎯 BOTH PRICES FOUND! Importing lot {j+1} with auction_sale: {lot.get('auction_sale')} and purchase_price: {lot.get('purchase_price')}...")
                         
                         property_data = {
                             'auction_name': auction.get('name', ''),
                             'auction_date': auction.get('date', ''),
                             'address': lot.get('address', ''),
-                            'price_bought': lot.get('price_bought', ''),  # Price bought from auction listing
+                            'auction_sale': lot.get('auction_sale', ''),  # Auction sale price from auction listing
                             'lot_number': lot.get('lot_number', ''),
                             'postcode': lot.get('postcode', ''),
-                            'sold_price': lot.get('sold_price', ''),
+                            'purchase_price': lot.get('purchase_price', ''),
                             'sold_date': lot.get('sale_date', ''),  # Sale date from property prices
                             'auction_url': auction.get('detail_url', ''),
                             # Additional metadata fields
@@ -1327,7 +1345,7 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                         }
                         
                         # Ensure all required fields have at least empty string values
-                        for field in ['auction_name', 'auction_date', 'address', 'price_bought', 'lot_number', 'postcode', 'sold_price', 'sold_date', 'auction_url']:
+                        for field in ['auction_name', 'auction_date', 'address', 'auction_sale', 'lot_number', 'postcode', 'purchase_price', 'sold_date', 'auction_url']:
                             if field not in property_data or property_data[field] is None:
                                 property_data[field] = ''
                         
@@ -1344,7 +1362,12 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                             total_skipped += 1
                             print(f"   ❌ Error importing lot {j+1}: {e}")
                     else:
-                        print(f"   ⏭️ Lot {j+1} skipped - no price_bought data found")
+                        if not (lot.get('auction_sale') and lot.get('auction_sale').strip()):
+                            print(f"   ⏭️ Lot {j+1} skipped - no auction_sale data found")
+                        elif not (lot.get('purchase_price') and lot.get('purchase_price').strip()):
+                            print(f"   ⏭️ Lot {j+1} skipped - no purchase_price data found (not in property prices database)")
+                        else:
+                            print(f"   ⏭️ Lot {j+1} skipped - missing both auction_sale and purchase_price data")
                         total_skipped += 1
                     
                     # Add small delay between lots

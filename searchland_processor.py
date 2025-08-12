@@ -20,7 +20,7 @@ class SearchlandSheetProcessor:
     
     def __init__(self):
         """Initialize the Searchland processor"""
-        self.webapp_url = "https://script.google.com/macros/s/AKfycbyp2RXahUVgZW9xMJyVYdCuyOcBoVqfpN_XeOQF91s8GjryvAakoCB2FdqVvlQ9Vtd2/exec"
+        self.webapp_url = "https://script.google.com/macros/s/AKfycbyjCzf8CA1FmK_zY3aaeYkuqXbNHS8Rm9xn7Im2LTRRtr0ftk5xNH44J1z_v7k3pztM/exec"
         self.shared_token = os.getenv('GOOGLE_SHEETS_SHARED_TOKEN', '3c4ebe48f035fd3f68ccd5c9f619d7aa3f686d2d7637dc54324d979acc066feb')
         self.sheet_id = os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q')
         self.processed_count = 0
@@ -165,46 +165,16 @@ class SearchlandSheetProcessor:
                     await browser.close()
                     return None
                 
-                # Click on search bar to open dropdown
+                # Click on search bar to open it
                 await search_bar.click()
                 await page.wait_for_timeout(1000)
                 
-                # Click on "Specific address" tab
-                specific_address_tab = await page.query_selector("button:has-text('Specific address'), [data-testid='specific-address'], .specific-address-tab")
-                if not specific_address_tab:
-                    print(f"    ❌ Could not find 'Specific address' tab")
-                    await browser.close()
-                    return None
+                # Type the address directly into the search bar
+                await page.keyboard.type(f"{address}, {postcode}")
+                await page.wait_for_timeout(2000)  # Wait for suggestions to appear
                 
-                await specific_address_tab.click()
-                await page.wait_for_timeout(1000)
-                
-                # Find the address input field that appears after clicking "Specific address"
-                # Wait a bit longer for the input to appear
-                await page.wait_for_timeout(2000)
-                
-                address_input = await page.query_selector("input[placeholder='Search']")
-                if not address_input:
-                    print(f"    ❌ Could not find address input field")
-                    print(f"    🔍 Available inputs after clicking 'Specific address':")
-                    inputs = await page.query_selector_all("input")
-                    for i, inp in enumerate(inputs[:10]):
-                        placeholder = await inp.get_attribute("placeholder")
-                        input_type = await inp.get_attribute("type")
-                        input_id = await inp.get_attribute("id")
-                        print(f"       Input {i+1}: placeholder='{placeholder}', type='{input_type}', id='{input_id}'")
-                    await browser.close()
-                    return None
-                
-                # Ensure the input field is visible and focused
-                await address_input.scroll_into_view_if_needed()
-                await address_input.click()
-                await page.wait_for_timeout(500)
-                
-                # Clear and fill address input
-                await address_input.fill("")
-                await address_input.fill(f"{address}, {postcode}")
-                await address_input.press("Enter")
+                # Press Enter to search
+                await page.keyboard.press("Enter")
                 
                 # Wait for results to load
                 try:
