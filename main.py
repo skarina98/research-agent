@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from pydantic import BaseModel
+from typing import Optional
 import os
 import requests
 from eig import process_auctions_to_sheets
@@ -31,11 +32,11 @@ class InsightPayload(BaseModel):
 
 @app.post("/sheet/insights", operation_id="post_insights")
 def post_insight(payload: InsightPayload):
-    SHEETS_WEBAPP_URL = os.getenv("SHEETS_WEBAPP_URL")
-    GOOGLE_SHEETS_SHARED_TOKEN = os.getenv("GOOGLE_SHEETS_SHARED_TOKEN")
+    SHEETS_WEBAPP_URL = os.getenv("SHEETS_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbyp2RXahUVgZW9xMJyVYdCuyOcBoVqfpN_XeOQF91s8GjryvAakoCB2FdqVvlQ9Vtd2/exec")
+    GOOGLE_SHEETS_SHARED_TOKEN = os.getenv("GOOGLE_SHEETS_SHARED_TOKEN", "your_shared_token_here")
 
-    if not SHEETS_WEBAPP_URL or not GOOGLE_SHEETS_SHARED_TOKEN:
-        return {"status": "error", "message": "Missing SHEETS_WEBAPP_URL or GOOGLE_SHEETS_SHARED_TOKEN in environment"}
+    if not GOOGLE_SHEETS_SHARED_TOKEN or GOOGLE_SHEETS_SHARED_TOKEN == "your_shared_token_here":
+        return {"status": "error", "message": "Missing GOOGLE_SHEETS_SHARED_TOKEN in environment"}
 
     row = {
         "auction_name": payload.auction_name,
@@ -55,12 +56,22 @@ def post_insight(payload: InsightPayload):
     return {"status": "success", "message": "Insight posted successfully"}
 
 @app.get("/sheet/data", operation_id="get_sheet_data")
-def get_sheet_data():
-    SHEETS_GET_URL = os.getenv("SHEETS_GET_URL")
-    if not SHEETS_GET_URL:
-        return {"status": "error", "message": "Missing SHEETS_GET_URL in environment"}
+def get_sheet_data(
+    auction_house: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    max_rows: Optional[int] = Query(50)
+):
+    SHEETS_WEBAPP_URL = os.getenv("SHEETS_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbyp2RXahUVgZW9xMJyVYdCuyOcBoVqfpN_XeOQF91s8GjryvAakoCB2FdqVvlQ9Vtd2/exec")
 
-    response = requests.get(SHEETS_GET_URL)
+    params = {
+        "auction_house": auction_house,
+        "start_date": start_date,
+        "end_date": end_date,
+        "max_rows": max_rows
+    }
+
+    response = requests.get(SHEETS_WEBAPP_URL, params=params)
 
     if not response.ok:
         return {"status": "error", "message": response.text}

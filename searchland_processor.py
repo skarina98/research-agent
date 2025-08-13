@@ -173,8 +173,37 @@ class SearchlandSheetProcessor:
                 await page.keyboard.type(f"{address}, {postcode}")
                 await page.wait_for_timeout(2000)  # Wait for suggestions to appear
                 
-                # Press Enter to search
-                await page.keyboard.press("Enter")
+                # Look for and click the search button (Material-UI button with icon)
+                search_button_selectors = [
+                    "button[type='button']",  # Material-UI button
+                    ".MuiButtonBase-root",  # Material-UI button base
+                    ".MuiIconButton-root",  # Material-UI icon button
+                    "button:has(svg)",  # Button with SVG icon
+                    "button[tabindex='0']",  # Focusable button
+                    "[class*='search'] button",  # Any button in search area
+                    "button:has-text('Search')",  # Button with search text
+                    "button:has-text('Go')",  # Button with go text
+                ]
+                
+                search_button_clicked = False
+                for selector in search_button_selectors:
+                    try:
+                        search_button = await page.query_selector(selector)
+                        if search_button:
+                            # Check if it's visible and clickable
+                            is_visible = await search_button.is_visible()
+                            if is_visible:
+                                await search_button.click()
+                                print(f"    ✅ Clicked search button with selector: {selector}")
+                                search_button_clicked = True
+                                break
+                    except Exception as e:
+                        continue
+                
+                if not search_button_clicked:
+                    # Fallback: Press Enter if no button found
+                    print(f"    ⚠️ No search button found, pressing Enter instead")
+                    await page.keyboard.press("Enter")
                 
                 # Wait for results to load
                 try:
