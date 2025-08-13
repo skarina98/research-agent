@@ -976,111 +976,66 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
             lot_data['address'] = f"Unknown Address - Lot {lot_data['lot_number']}"
             print(f"    ⚠️ No address found, using generic: {lot_data['address']}")
         
-        # Extract price bought from the auction results table
-        # First try to get it from the auction results table we extracted earlier
-        print(f"    🔍 Debug: Looking for lot_number '{lot_data['lot_number']}' in auction_results keys: {list(auction_results.keys())}")
-        if auction_results and lot_data['lot_number'] in auction_results:
-            result_text = auction_results[lot_data['lot_number']]
-            import re
-            
-            # Look for "Sold for £X" format - capture actual prices
-            sold_for_match = re.search(r'Sold\s+for\s+£([\d,]+(?:,\d{3})*)', result_text, re.IGNORECASE)
-            if sold_for_match:
-                lot_data['auction_sale'] = f"£{sold_for_match.group(1)}"
-                print(f"    📍 Found price from auction results table: {lot_data['auction_sale']}")
-            else:
-                # Capture the full result text as-is (for status like "Reserved", "Withdrawn Prior", etc.)
-                lot_data['auction_sale'] = result_text
-                print(f"    📍 Captured status text from auction results table: {lot_data['auction_sale']}")
-        else:
-            # Fallback: Look for tables with "Result" column that contains "Sold for £X" or status
-            price_bought_selectors = [
-                "table",  # Look for any table
-                ".results-table",
-                ".auction-results",
-                ".lot-results",
-                "[class*='results']",
-                "[class*='table']"
-            ]
+        # Extract auction sale from the individual lot page
+        # Look for auction sale information in h2/h3 elements with text-end class
+        auction_sale_selectors = [
+            ".text-end h2",  # Primary selector - h2 inside text-end div
+            ".text-end h3",  # Secondary selector - h3 inside text-end div
+            ".text-end",  # Any element with text-end class
+            "h2", "h3",  # Fallback to any h2 or h3 headers
+            ".auction-result",
+            ".lot-result", 
+            ".sale-status",
+            ".auction-status",
+            "[class*='result']",
+            "[class*='sale']",
+            "[class*='status']",
+            ".price",
+            ".sold-price",
+            ".auction-price"
+        ]
         
-        price_bought_found = False
-        for selector in price_bought_selectors:
+        auction_sale_found = False
+        for selector in auction_sale_selectors:
             try:
-                # Look for tables with "Result" column
-                tables = lot_page.query_selector_all(selector)
-                for table in tables:
-                    # Check if this table has a "Result" column
-                    headers = table.query_selector_all("th, td")
-                    result_column_index = -1
-                    
-                    # Find the "Result" column
-                    for i, header in enumerate(headers):
-                        header_text = header.text_content().strip().lower()
-                        if "result" in header_text:
-                            result_column_index = i
-                            break
-                    
-                    if result_column_index >= 0:
-                        # Find the row that matches our lot number
-                        rows = table.query_selector_all("tr")
-                        for row in rows:
-                            cells = row.query_selector_all("td")
-                            if len(cells) > result_column_index:
-                                # Check if this row is for our lot
-                                first_cell = cells[0].text_content().strip()
-                                if f"Lot {lot_data['lot_number']}" in first_cell or lot_data['lot_number'] in first_cell:
-                                    # Extract the result text
-                                    result_cell = cells[result_column_index].text_content().strip()
-                                    if result_cell:
-                                        # Look for "Sold for £X" or status patterns
-                                        import re
-                                        
-                                        # Look for "Sold for £X" format
-                                        sold_for_match = re.search(r'Sold\s+for\s+£([\d,]+(?:,\d{3})*)', result_cell, re.IGNORECASE)
-                                        if sold_for_match:
-                                            lot_data['auction_sale'] = f"£{sold_for_match.group(1)}"
-                                            price_bought_found = True
-                                            print(f"    📍 Found price from results table: {lot_data['auction_sale']}")
-                                            break
-                                        
-                                        # Look for price patterns first
-                                        price_patterns = [
-                                            r'£([\d,]+(?:,\d{3})*)',  # Standard price format like £185,000
-                                            r'Sold\s+at\s+£([\d,]+(?:,\d{3})*)',  # "Sold at £X"
-                                            r'Price\s+£([\d,]+(?:,\d{3})*)',  # "Price £X"
-                                        ]
-                                        
-                                        price_found = False
-                                        for pattern in price_patterns:
-                                            match = re.search(pattern, result_cell, re.IGNORECASE)
-                                            if match:
-                                                lot_data['auction_sale'] = f"£{match.group(1)}"
-                                                price_bought_found = True
-                                                print(f"    📍 Found price from results table: {lot_data['auction_sale']}")
-                                                price_found = True
-                                                break
-                                        
-                                        if price_found:
-                                            break
-                                        
-                                        # If no price found, capture the full result text as-is
-                                        if result_cell and result_cell.strip():
-                                            lot_data['auction_sale'] = result_cell.strip()
-                                            price_bought_found = True
-                                            print(f"    📍 Captured status text from results table: {lot_data['auction_sale']}")
-                                            break
+                # Look for elements that might contain auction sale information
+                elements = lot_page.query_selector_all(selector)
+                for element in elements:
+                    text = element.text_content().strip()
+                    if text and len(text) > 3:  # Reasonable length for auction sale info
+                        # Check if this looks like auction sale information
+                        # Look for price patterns or status keywords
+                        import re
                         
-                        if price_bought_found:
+                        # Check for price patterns
+                        price_patterns = [
+                            r'Sold\s+for\s+£([\d,]+(?:,\d{3})*)',  # "Sold for £X"
+                            r'Sold\s+at\s+£([\d,]+(?:,\d{3})*)',   # "Sold at £X"
+                            r'£([\d,]+(?:,\d{3})*)',               # Standard price format
+                        ]
+                        
+                        # Check for status keywords
+                        status_keywords = ['sold', 'unsold', 'withdrawn', 'reserved', 'auctioneer']
+                        
+                        # If it contains price patterns or status keywords, it's likely auction sale info
+                        is_price = any(re.search(pattern, text, re.IGNORECASE) for pattern in price_patterns)
+                        is_status = any(keyword in text.lower() for keyword in status_keywords)
+                        
+                        if is_price or is_status:
+                            lot_data['auction_sale'] = text
+                            auction_sale_found = True
+                            print(f"    📍 Captured auction sale from {selector}: {lot_data['auction_sale']}")
                             break
+                
+                if auction_sale_found:
+                    break
+                    
             except Exception as e:
-                print(f"    ⚠️ Error processing table {selector}: {e}")
+                print(f"    ⚠️ Error processing selector {selector}: {e}")
                 continue
-            
-            if price_bought_found:
-                break
         
-        # If no price bought found with selectors, try to extract from page text
-        if not price_bought_found:
+        # If no auction sale found with selectors, try to extract from page text
+        if not auction_sale_found:
             try:
                 page_text = lot_page.locator("body").text_content()
                 if page_text:
