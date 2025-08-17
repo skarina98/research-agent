@@ -1,6 +1,0 @@
-2025/08/12-18:16:55.025 213d36f Reusing MANIFEST /Users/karinasavoie/kalro-ai/research-agent/sessions/searchland/Default/Local Storage/leveldb/MANIFEST-000001
-2025/08/12-18:16:55.027 213d36f Recovering log #3
-2025/08/12-18:16:55.028 213d36f Reusing old log /Users/karinasavoie/kalro-ai/research-agent/sessions/searchland/Default/Local Storage/leveldb/000003.log 
-2025/08/12-18:17:36.725 213d36f Level-0 table #5: started
-2025/08/12-18:17:36.729 213d36f Level-0 table #5: 36205 bytes OK
-2025/08/12-18:17:36.732 213d36f Delete type=0 #3

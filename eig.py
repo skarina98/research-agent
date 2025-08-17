@@ -18,8 +18,8 @@ def find_auctions(start_date: str, end_date: str):
             
         page = context.new_page()
 
-        print(f"Navigating directly to Auction House London results...")
-        # Try the direct URL for Auction House London (ID: 680)
+        print(f"Navigating to EIG auction results...")
+        # Navigate to the specific auctioneer results page that was working before
         page.goto("https://www.eigpropertyauctions.co.uk/clients/auctions/results?SelectedAuctioneerId=680")
         page.wait_for_timeout(3000)
 
@@ -284,7 +284,12 @@ def parse_event_days(event_url: str, auction_name: str = "", auction_date: str =
         print("Extracting auction results table...")
         auction_results = extract_auction_results_table(page)
         print(f"Extracted auction results: {auction_results}")
-        print(f"Debug: auction_results keys: {list(auction_results.keys())}")
+        print(f"Debug: auction_results type: {type(auction_results)}")
+        if isinstance(auction_results, dict):
+            print(f"Debug: auction_results keys: {list(auction_results.keys())}")
+        elif isinstance(auction_results, list):
+            print(f"Debug: auction_results length: {len(auction_results)}")
+            print(f"Debug: first few auction URLs: {auction_results[:3]}")
         
         print(f"Page title: {page.title()}")
         print(f"Page URL: {page.url}")
@@ -374,7 +379,7 @@ def parse_event_days(event_url: str, auction_name: str = "", auction_date: str =
                     lots.append(lot_data)
                     
                     if i < 5:  # Show first 5 lots for debugging
-                        print(f"  ✅ Lot {i+1}: {lot_data.get('address', 'No address')} - {lot_data.get('sold_price', 'No price')}")
+                        print(f"  ✅ Lot {i+1}: {lot_data.get('address', 'No address')} - {lot_data.get('purchase_price', 'No price')}")
                 else:
                     # If extract_lot_data_from_page returns None, create basic lot data
                     print(f"  ⚠️ Lot {i+1}: extract_lot_data_from_page returned None, creating basic data")
@@ -382,10 +387,10 @@ def parse_event_days(event_url: str, auction_name: str = "", auction_date: str =
                     # Create basic lot data without property prices
                     basic_lot_data = {
                         'address': f"Unknown Address - Lot {i + 1}",
-                        'sold_price': '',
+                        'purchase_price': '',
                         'sale_date': '',
                         'lot_number': str(i + 1),
-                        'auction_price': '',
+                        'auction_sale': '',
                         'postcode': '',
                         'source_url': lot_url,
                         'auction_name': auction_name,
@@ -421,57 +426,62 @@ def parse_event_days(event_url: str, auction_name: str = "", auction_date: str =
 
 def extract_auction_results_table(page):
     """
-    Extract the auction results table from the main auction page.
-    Returns a dictionary mapping lot numbers to their results.
+    Extract auction URLs from the recent auctions listing page.
+    Returns a list of auction URLs to process.
     """
-    auction_results = {}
+    auction_urls = []
     
     try:
-        # Look for tables with "Result" column
+        # Look for tables with auction listings
         tables = page.query_selector_all("table")
         print(f"    🔍 Found {len(tables)} tables on the auction page")
         for i, table in enumerate(tables):
             print(f"    📋 Processing table {i+1}/{len(tables)}")
-            # Check if this table has a "Result" column
+            # Check if this table has auction data
             headers = table.query_selector_all("th, td")
-            result_column_index = -1
-            lot_column_index = -1
             
-            # Find the "Result" and "Lot No" columns
+            # Find the "Lots" column (this indicates it's an auction listing)
+            lots_column_index = -1
+            date_column_index = -1
+            
+            # Find relevant columns
             print(f"    📋 Table {i+1} headers: {[h.text_content().strip() for h in headers[:5]]}...")
             for j, header in enumerate(headers):
                 header_text = header.text_content().strip().lower()
-                if "result" in header_text:
-                    result_column_index = j
-                    print(f"    ✅ Found 'Result' column at index {j}")
-                elif "lot" in header_text and "no" in header_text:
-                    lot_column_index = j
-                    print(f"    ✅ Found 'Lot No' column at index {j}")
+                if "lots" in header_text:
+                    lots_column_index = j
+                    print(f"    ✅ Found 'Lots' column at index {j}")
+                elif "date" in header_text:
+                    date_column_index = j
+                    print(f"    ✅ Found 'Date' column at index {j}")
             
-            if result_column_index >= 0 and lot_column_index >= 0:
-                # Extract data from each row
+            if lots_column_index >= 0:
+                # Extract auction URLs from each row
                 rows = table.query_selector_all("tr")
                 for row in rows:
                     cells = row.query_selector_all("td")
-                    if len(cells) > max(result_column_index, lot_column_index):
-                        # Extract lot number (can include letters like "156A", "157B")
-                        lot_cell = cells[lot_column_index].text_content().strip()
-                        lot_match = re.search(r'(\d+[A-Za-z]*)', lot_cell)
-                        if lot_match:
-                            lot_number = lot_match.group(1)
-                            
-                            # Extract result
-                            result_cell = cells[result_column_index].text_content().strip()
-                            if result_cell:
-                                auction_results[lot_number] = result_cell
-                                print(f"    📋 Lot {lot_number}: {result_cell}")
+                    if len(cells) > lots_column_index:
+                        # Look for auction links in this row
+                        auction_links = row.query_selector_all("a[href*='auction']")
+                        for link in auction_links:
+                            try:
+                                href = link.get_attribute("href")
+                                if href and "/auction" in href:
+                                    # Make sure it's a full URL
+                                    if href.startswith("/"):
+                                        href = "https://www.eigpropertyauctions.co.uk" + href
+                                    auction_urls.append(href)
+                                    print(f"    📋 Found auction URL: {href}")
+                            except Exception as e:
+                                print(f"    ⚠️ Error extracting auction URL: {e}")
+                                continue
         
-        print(f"    ✅ Extracted {len(auction_results)} lot results from auction table")
-        return auction_results
+        print(f"    ✅ Extracted {len(auction_urls)} auction URLs from table")
+        return auction_urls
         
     except Exception as e:
-        print(f"    ⚠️ Error extracting auction results table: {e}")
-        return {}
+        print(f"    ⚠️ Error extracting auction URLs table: {e}")
+        return []
 
 
 def lookup_property_in_prices_page(page, address):
@@ -697,6 +707,7 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
             'lot_number': str(lot_number),  # Default to sequential number
             'address': '',
             'auction_sale': '',
+            'guide_price': None,  # Allow guide price to be null
             'purchase_price': '',
             'sale_date': '',
             'postcode': '',
@@ -1079,6 +1090,173 @@ def extract_lot_data_from_page(lot_page, lot_number, auction_results=None):
             except Exception as e:
                 print(f"    ⚠️ Error extracting price bought from page text: {e}")
         
+        # Extract guide price from the catalogue entry PDF
+        print(f"    📄 Looking for Catalogue Entry link to get guide price...")
+        
+        # First, find and click the "Catalogue Entry" link
+        catalogue_entry_selectors = [
+            "text=Catalogue Entry",
+            "text=catalogue entry",
+            "text=CATALOGUE ENTRY",
+            "a:has-text('Catalogue Entry')",
+            "a:has-text('catalogue entry')",
+            "[href*='pdf']",
+            "[href*='catalogue']",
+            "a[href*='pdf']",
+            "a[href*='catalogue']"
+        ]
+        
+        catalogue_clicked = False
+        for selector in catalogue_entry_selectors:
+            try:
+                elements = lot_page.query_selector_all(selector)
+                for element in elements:
+                    try:
+                        text = element.text_content().strip()
+                        if "catalogue entry" in text.lower():
+                            print(f"    📄 Found Catalogue Entry link: {text}")
+                            # Click the link to open the catalogue entry
+                            element.click()
+                            print(f"    ✅ Clicked Catalogue Entry link")
+                            lot_page.wait_for_timeout(3000)  # Wait for page to load
+                            catalogue_clicked = True
+                            break
+                    except Exception as e:
+                        print(f"    ⚠️ Error clicking element: {e}")
+                        continue
+                
+                if catalogue_clicked:
+                    break
+            except Exception as e:
+                print(f"    ⚠️ Error with selector {selector}: {e}")
+                continue
+        
+        # Now extract guide price from the catalogue entry page
+        if catalogue_clicked:
+            print(f"    💰 Extracting guide price from catalogue entry...")
+            guide_price_selectors = [
+                "text=Guide Price",
+                "text=guide price", 
+                "text=GUIDE PRICE",
+                "text=Estimate",
+                "text=estimate",
+                "text=ESTIMATE",
+                ".guide-price",
+                ".estimate",
+                "[class*='guide']",
+                "[class*='estimate']",
+                ".price",
+                "[class*='price']",
+                "h2", "h3", "h4", "h5", "h6",
+                ".lot-description",
+                ".property-description"
+            ]
+        else:
+            print(f"    ⚠️ Could not find Catalogue Entry link, trying main page...")
+            guide_price_selectors = [
+                "text=Guide Price",
+                "text=guide price",
+                "text=GUIDE PRICE", 
+                "text=Estimate",
+                "text=estimate",
+                "text=ESTIMATE",
+                ".guide-price",
+                ".estimate",
+                "[class*='guide']",
+                "[class*='estimate']",
+                ".price",
+                "[class*='price']",
+                "h2", "h3", "h4", "h5", "h6",
+                ".lot-description",
+                ".property-description"
+            ]
+        
+        guide_price_found = False
+        for selector in guide_price_selectors:
+            try:
+                if selector.startswith("text="):
+                    # Text-based selector - look for "Guide Price" and get the value
+                    text_value = selector[5:]  # Remove "text=" prefix
+                    elements = lot_page.query_selector_all(f"text={text_value}")
+                    for elem in elements:
+                        # Get the parent element and look for the guide price in siblings or children
+                        parent = elem.evaluate("el => el.parentElement")
+                        if parent:
+                            # Look for the guide price in the same container
+                            siblings = parent.query_selector_all("*")
+                            for sibling in siblings:
+                                text = sibling.text_content().strip()
+                                # Look for price patterns including the "+" symbol
+                                import re
+                                price_match = re.search(r'£([\d,]+(?:,\d{3})*)\+?', text)
+                                if price_match:
+                                    # Include the "+" if it exists
+                                    full_match = re.search(r'£([\d,]+(?:,\d{3})*\+?)', text)
+                                    if full_match:
+                                        lot_data['guide_price'] = f"£{full_match.group(1)}"
+                                    else:
+                                        lot_data['guide_price'] = f"£{price_match.group(1)}"
+                                    guide_price_found = True
+                                    print(f"    📍 Found guide price: {lot_data['guide_price']}")
+                                    break
+                        if guide_price_found:
+                            break
+                else:
+                    # CSS selector
+                    guide_elem = lot_page.query_selector(selector)
+                    if guide_elem:
+                        text = guide_elem.text_content().strip()
+                        if text:
+                            # Look for price patterns in the text including the "+" symbol
+                            import re
+                            price_match = re.search(r'£([\d,]+(?:,\d{3})*\+?)', text)
+                            if price_match:
+                                # Include the "+" if it exists
+                                full_match = re.search(r'£([\d,]+(?:,\d{3})*\+?)', text)
+                                if full_match:
+                                    lot_data['guide_price'] = f"£{full_match.group(1)}"
+                                else:
+                                    lot_data['guide_price'] = f"£{price_match.group(1)}"
+                                guide_price_found = True
+                                print(f"    📍 Found guide price from {selector}: {lot_data['guide_price']}")
+                                break
+            except Exception as e:
+                print(f"    ⚠️ Error processing guide price selector {selector}: {e}")
+                continue
+            
+            if guide_price_found:
+                break
+        
+        # If no guide price found with selectors, try to extract from page text
+        if not guide_price_found:
+            try:
+                page_text = lot_page.locator("body").text_content()
+                if page_text:
+                    import re
+                    # Look for guide price patterns including the "+" symbol
+                    guide_patterns = [
+                        r'Guide\s+Price.*?£([\d,]+(?:,\d{3})*\+?)',
+                        r'Estimate.*?£([\d,]+(?:,\d{3})*\+?)',
+                        r'Guide.*?£([\d,]+(?:,\d{3})*\+?)',
+                        r'Est.*?£([\d,]+(?:,\d{3})*\+?)',
+                        r'\*Guide\s+Price.*?£([\d,]+(?:,\d{3})*\+?)',  # With asterisk as shown in image
+                    ]
+                    
+                    for pattern in guide_patterns:
+                        match = re.search(pattern, page_text, re.IGNORECASE)
+                        if match:
+                            lot_data['guide_price'] = f"£{match.group(1)}"
+                            guide_price_found = True
+                            print(f"    📍 Found guide price from page text: {lot_data['guide_price']}")
+                            break
+            except Exception as e:
+                print(f"    ⚠️ Error extracting guide price from page text: {e}")
+        
+        # If no guide price found, log it
+        if not guide_price_found:
+            print(f"    ⚠️ No guide price found for this lot")
+            lot_data['guide_price'] = None  # Ensure it's explicitly None
+        
         # Check if we're on a login page (session expired)
         if lot_data['address'] and ('login' in lot_data['address'].lower() or 'sign in' in lot_data['address'].lower()):
             print(f"    ⚠️ Session expired - redirected to login page")
@@ -1277,19 +1455,30 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                     print(f"   Lot property_prices_status: {lot.get('property_prices_status', 'NOT SET')}")
                     
                     # Import lots that have BOTH auction_sale data AND purchase_price data
-                    if lot.get('auction_sale') and lot.get('auction_sale').strip() and lot.get('purchase_price') and lot.get('purchase_price').strip():
-                        print(f"   🎯 BOTH PRICES FOUND! Importing lot {j+1} with auction_sale: {lot.get('auction_sale')} and purchase_price: {lot.get('purchase_price')}...")
+                    # OR lots that have guide_price data (even without both prices)
+                    has_both_prices = lot.get('auction_sale') and lot.get('auction_sale').strip() and lot.get('purchase_price') and lot.get('purchase_price').strip()
+                    has_guide_price = lot.get('guide_price') and lot.get('guide_price').strip()
+                    
+                    if has_both_prices or has_guide_price:
+                        if has_both_prices:
+                            print(f"   🎯 BOTH PRICES FOUND! Importing lot {j+1} with auction_sale: {lot.get('auction_sale')} and purchase_price: {lot.get('purchase_price')}...")
+                        elif has_guide_price:
+                            print(f"   🎯 GUIDE PRICE FOUND! Importing lot {j+1} with guide_price: {lot.get('guide_price')}...")
+                        else:
+                            print(f"   🎯 IMPORTING lot {j+1}...")
+                        print(f"   📍 Guide price found: {lot.get('guide_price', 'NOT FOUND')}")
                         
                         property_data = {
                             'auction_name': auction.get('name', ''),
                             'auction_date': auction.get('date', ''),
                             'address': lot.get('address', ''),
                             'auction_sale': lot.get('auction_sale', ''),  # Auction sale price from auction listing
+                            'guide_price': lot.get('guide_price', ''),  # Guide price from EIG catalogue entry
                             'lot_number': lot.get('lot_number', ''),
                             'postcode': lot.get('postcode', ''),
                             'purchase_price': lot.get('purchase_price', ''),
                             'sold_date': lot.get('sale_date', ''),  # Sale date from property prices
-                            'auction_url': auction.get('detail_url', ''),
+                            'auction_url': lot.get('source_url', ''),  # Individual lot URL
                             # Additional metadata fields
                             'source_url': lot.get('source_url', ''),
                             'property_prices_status': 'found',
@@ -1306,6 +1495,7 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                         
                         # Import this lot immediately to sheets
                         try:
+                            print(f"   📤 Sending to Google Sheet - Guide Price: {property_data.get('guide_price', 'NOT FOUND')}")
                             result = sheets_manager.process_property_data(property_data)
                             if result.get('status') == 'success':
                                 total_imported += 1
@@ -1317,12 +1507,12 @@ def process_auctions_to_sheets(start_date: str, end_date: str):
                             total_skipped += 1
                             print(f"   ❌ Error importing lot {j+1}: {e}")
                     else:
-                        if not (lot.get('auction_sale') and lot.get('auction_sale').strip()):
-                            print(f"   ⏭️ Lot {j+1} skipped - no auction_sale data found")
-                        elif not (lot.get('purchase_price') and lot.get('purchase_price').strip()):
-                            print(f"   ⏭️ Lot {j+1} skipped - no purchase_price data found (not in property prices database)")
-                        else:
+                        if not has_guide_price:
+                            print(f"   ⏭️ Lot {j+1} skipped - no guide_price data found")
+                        elif not has_both_prices:
                             print(f"   ⏭️ Lot {j+1} skipped - missing both auction_sale and purchase_price data")
+                        else:
+                            print(f"   ⏭️ Lot {j+1} skipped - no importable data found")
                         total_skipped += 1
                     
                     # Add small delay between lots

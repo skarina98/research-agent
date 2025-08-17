@@ -24,7 +24,7 @@ class PropertyDataManagerWebApp:
             webapp_url: Google Apps Script web app URL
             shared_token: Shared token for authentication
         """
-        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbyjCzf8CA1FmK_zY3aaeYkuqXbNHS8Rm9xn7Im2LTRRtr0ftk5xNH44J1z_v7k3pztM/exec"
+        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbyq-rzQJCXz3OiDhrHHNoZ-3jrUvTF-5OR9l9QtlyQTVib6rfGN6MOeWXDNlIIhkNAE/exec"
         self.shared_token = shared_token or os.getenv('GOOGLE_SHEETS_SHARED_TOKEN')
         
         # Fallback to local JSON file
@@ -75,6 +75,7 @@ class PropertyDataManagerWebApp:
             # The script expects: body.rows (array) with specific field names
             script_payload = {
                 'token': self.shared_token,
+                'action': 'add',  # Add the action field
                 'rows': [{
                     'auction_name': property_data.get('auction_name', ''),
                     'auction_date': property_data.get('auction_date', ''),
@@ -85,7 +86,7 @@ class PropertyDataManagerWebApp:
                     'purchase_price': property_data.get('purchase_price', ''),
                     'sold_date': property_data.get('sold_date', ''),
                     'owner': '',  # Not provided in our data
-                    'guide_price': '',  # Leave guide_price empty as requested
+                    'guide_price': property_data.get('guide_price', '') if property_data.get('guide_price') is not None else '',  # Handle null guide price
                     'auction_url': property_data.get('auction_url', ''),  # New auction_url field
                     'source_url': '',  # Leave source_url empty as requested
                     'qa_status': 'imported',  # Default status
@@ -184,7 +185,7 @@ class PropertyDataManagerWebApp:
         # Validate required fields - make auction_price optional since it's not always available
         required_fields = [
             'auction_name', 'auction_date', 'address', 
-            'lot_number', 'postcode', 'sold_price', 'sold_date', 'auction_url'
+            'lot_number', 'postcode', 'purchase_price', 'sold_date', 'auction_url'
         ]
         
         missing_fields = []
