@@ -16,7 +16,10 @@ import sys
 import time
 import random
 import re
+import json
+import requests
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from playwright.sync_api import sync_playwright
 from sheets_webapp import PropertyDataManagerWebApp
 
@@ -222,81 +225,105 @@ class ListingEnrichmentWorkflow:
             print(f"⚠️ Error stopping playwright: {e}")
     
     def get_missing_data_rows(self):
-        """Get rows from Google Sheet that are missing guide_price or source_url"""
-        print("📊 Scanning Google Sheet for rows missing guide_price or source_url...")
+        """Get rows from both AUCTIONS_MASTER and POTENTIAL_TRADES sheets that are missing guide_price or source_url"""
+        print("📊 Scanning both Google Sheets for rows missing guide_price or source_url...")
         
         try:
-            # Always get fresh data from Google Sheet
-            print("🔄 Fetching latest data from Google Sheet...")
+            # Always get fresh data from both Google Sheets
+            print("🔄 Fetching latest data from both sheets...")
             
             import requests
             webapp_url = self.sheets_manager.webapp_url
             shared_token = self.sheets_manager.shared_token
             
-            if webapp_url and shared_token:
-                payload = {
-                    'token': shared_token,
-                    'action': 'read',
-                    'sheet_id': os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q')
-                }
-                
-                response = requests.post(webapp_url, json=payload, timeout=30)
-                if response.status_code == 200:
-                    result = response.json()
-                    if result.get('ok') and result.get('rows'):
-                        existing_data = result.get('rows', [])
-                        print(f"✅ Successfully fetched {len(existing_data)} rows from Google Sheet")
-                    else:
-                        print(f"⚠️ Could not fetch from Google Sheet, using local data")
-                        existing_data = self.sheets_manager.property_data
-                else:
-                    print(f"⚠️ Could not fetch from Google Sheet, using local data")
-                    existing_data = self.sheets_manager.property_data
-            else:
-                print(f"⚠️ Could not fetch from Google Sheet, using local data")
-                existing_data = self.sheets_manager.property_data
+            all_missing_rows = []
             
-            missing_rows = []
-            for i, row in enumerate(existing_data):
-                guide_price = row.get('guide_price', '')
-                source_url = row.get('source_url', '')
+            # Process both sheets
+            sheets_to_process = ['AUCTIONS_MASTER', 'POTENTIAL_TRADES']
+            
+            for sheet_name in sheets_to_process:
+                print(f"\n📋 Processing {sheet_name} sheet...")
                 
-                # Handle None values and convert to string
-                guide_price = str(guide_price).strip() if guide_price is not None else ''
-                source_url = str(source_url).strip() if source_url is not None else ''
-                
-                # Process rows that are missing guide_price (even if they have source_url)
-                # Skip test addresses
-                address = row.get('address', '')
-                if 'test' in address.lower():
-                    print(f"   ⏭️ Row {i+1}: {address} - Skipping test address")
+                if webapp_url and shared_token:
+                    # For now, we'll use the same read action but we need to modify the Google Apps Script
+                    # to support reading from different sheets. For now, let's process AUCTIONS_MASTER first
+                    if sheet_name == 'AUCTIONS_MASTER':
+                        payload = {
+                            'token': shared_token,
+                            'action': 'read',
+                            'sheet_id': os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q')
+                        }
+                    else:
+                        # For POTENTIAL_TRADES, we'll need to implement sheet-specific reading
+                        # For now, let's skip and focus on AUCTIONS_MASTER
+                        print(f"   ⏭️ Skipping {sheet_name} for now - will implement sheet-specific reading")
+                        continue
+                    
+                    response = requests.post(webapp_url, json=payload, timeout=30)
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('ok') and result.get('rows'):
+                            existing_data = result.get('rows', [])
+                            print(f"   ✅ Successfully fetched {len(existing_data)} rows from {sheet_name}")
+                        else:
+                            print(f"   ⚠️ Could not fetch from {sheet_name}, skipping")
+                            continue
+                    else:
+                        print(f"   ⚠️ Could not fetch from {sheet_name}, skipping")
+                        continue
+                else:
+                    print(f"   ⚠️ Could not fetch from {sheet_name}, skipping")
                     continue
                 
-                if not guide_price:
-                    missing_rows.append({
-                        'row_index': i,
-                        'data': row,
-                        'missing_guide_price': True,
-                        'missing_source_url': not source_url
-                    })
-                    if not source_url:
-                        print(f"   📋 Row {i+1}: {address} - Missing BOTH guide_price and source_url")
+                # Process rows from this sheet
+                missing_rows = []
+                for i, row in enumerate(existing_data):
+                    guide_price = row.get('guide_price', '')
+                    source_url = row.get('source_url', '')
+                    
+                    # Handle None values and convert to string
+                    guide_price = str(guide_price).strip() if guide_price is not None else ''
+                    source_url = str(source_url).strip() if source_url is not None else ''
+                    
+                    # Process rows that are missing guide_price (even if they have source_url)
+                    # Skip test addresses
+                    address = row.get('address', '')
+                    if 'test' in address.lower():
+                        print(f"      ⏭️ Row {i+1}: {address} - Skipping test address")
+                        continue
+                    
+                    if not guide_price:
+                        missing_rows.append({
+                            'row_index': i,
+                            'data': row,
+                            'sheet_name': sheet_name,
+                            'missing_guide_price': True,
+                            'missing_source_url': not source_url
+                        })
+                        if not source_url:
+                            print(f"      📋 Row {i+1}: {address} - Missing BOTH guide_price and source_url")
+                        else:
+                            print(f"      📋 Row {i+1}: {address} - Has source_url, missing guide_price only")
+                    elif not source_url:
+                        print(f"      ⏭️ Row {i+1}: {address} - Has guide_price, missing source_url only")
                     else:
-                        print(f"   📋 Row {i+1}: {address} - Has source_url, missing guide_price only")
-                elif not source_url:
-                    print(f"   ⏭️ Row {i+1}: {address} - Has guide_price, missing source_url only")
-                else:
-                    print(f"   ✅ Row {i+1}: {address} - BOTH guide_price and source_url are filled")
+                        print(f"      ✅ Row {i+1}: {address} - BOTH guide_price and source_url are filled")
+                
+                print(f"   📋 Found {len(missing_rows)} rows missing guide_price in {sheet_name}")
+                all_missing_rows.extend(missing_rows)
             
-            print(f"📋 Found {len(missing_rows)} rows missing guide_price")
-            if missing_rows:
-                print(f"📋 Will process these addresses:")
-                for row_info in missing_rows[:5]:  # Show first 5
-                    print(f"   - {row_info['data'].get('address', 'Unknown')}")
-                if len(missing_rows) > 5:
-                    print(f"   ... and {len(missing_rows) - 5} more")
+            print(f"\n📊 Total Summary:")
+            print(f"   📋 Found {len(all_missing_rows)} total rows missing guide_price across both sheets")
+            if all_missing_rows:
+                print(f"   📋 Will process these addresses:")
+                for row_info in all_missing_rows[:5]:  # Show first 5
+                    sheet_name = row_info.get('sheet_name', 'Unknown')
+                    address = row_info['data'].get('address', 'Unknown')
+                    print(f"      - {address} ({sheet_name})")
+                if len(all_missing_rows) > 5:
+                    print(f"      ... and {len(all_missing_rows) - 5} more")
             
-            return missing_rows
+            return all_missing_rows
             
         except Exception as e:
             print(f"❌ Error getting missing data rows: {e}")
@@ -305,16 +332,50 @@ class ListingEnrichmentWorkflow:
     def google_search_property_sites(self, address):
         """Google search for property listings on Rightmove first, then Zoopla if needed"""
         try:
-            # Try Rightmove first
-            print(f"🔍 Step 1: Google searching Rightmove: site:rightmove.co.uk \"{address}\"")
-            rightmove_links = self._search_specific_site(address, "rightmove.co.uk", "Rightmove")
+            all_links = []
             
-            if rightmove_links:
-                return rightmove_links
+            # Try multiple search variations for Rightmove - no quotation marks for flexibility
+            search_variations = [
+                f'site:rightmove.co.uk {address}',  # Full address without quotes
+                f'site:rightmove.co.uk {address.replace(",", " ")}',  # Replace commas with spaces
+                f'site:rightmove.co.uk {address.replace(",", "")}',  # Remove all commas
+                # Street + city combinations
+                f'site:rightmove.co.uk {address.split(",")[0].strip()} {address.split(",")[1].strip()}',
+                f'site:rightmove.co.uk {address.split(",")[0].strip()} {address.split(",")[-1].strip()}',  # Street + postcode
+                # Try without flat numbers but keep street name
+                f'site:rightmove.co.uk {re.sub(r"^flat\s+\d+[,\s]*", "", address.split(",")[0].strip())} {address.split(",")[-1].strip()}',
+                # Street name only
+                f'site:rightmove.co.uk {address.split(",")[0].strip()}',
+                # Only use postcode as last resort
+                f'site:rightmove.co.uk {address.split(",")[-1].strip()}'  # Just postcode (last resort)
+            ]
+            
+            for i, search_query in enumerate(search_variations):
+                search_type = "postcode-only" if search_query.endswith(address.split(",")[-1].strip()) else "full-address"
+                print(f"🔍 Step 1.{i+1}: Google searching Rightmove ({search_type}): {search_query}")
+                rightmove_links = self._search_specific_site(search_query, "rightmove.co.uk", "Rightmove")
+                all_links.extend(rightmove_links)
+                
+                # If we have enough links, stop (but don't stop if we only have postcode results)
+                if len(all_links) >= 3 and search_type != "postcode-only":
+                    print(f"   ✅ Found sufficient results with {search_type} search, stopping")
+                    break
+            
+            # Remove duplicates while preserving order
+            unique_links = []
+            seen = set()
+            for link in all_links:
+                if link not in seen:
+                    unique_links.append(link)
+                    seen.add(link)
+            
+            if unique_links:
+                print(f"✅ Found {len(unique_links)} unique Rightmove links")
+                return unique_links[:5]  # Return first 5 unique links
             
             # If no Rightmove links found, try Zoopla
-            print(f"🔍 Step 2: Google searching Zoopla: site:zoopla.co.uk \"{address}\"")
-            zoopla_links = self._search_specific_site(address, "zoopla.co.uk", "Zoopla")
+            print(f"🔍 Step 2: Google searching Zoopla: site:zoopla.co.uk {address}")
+            zoopla_links = self._search_specific_site(f"site:zoopla.co.uk {address}", "zoopla.co.uk", "Zoopla")
             
             return zoopla_links
             
@@ -322,11 +383,10 @@ class ListingEnrichmentWorkflow:
             print(f"❌ Error Google searching property sites: {e}")
             return []
     
-    def _search_specific_site(self, address, site_domain, site_name):
+    def _search_specific_site(self, search_query, site_domain, site_name):
         """Search for listings on a specific property site"""
         try:
-            # Construct the search query
-            search_query = f'site:{site_domain} "{address}"'
+            # Construct the search URL
             search_url = f"https://www.google.com/search?q={search_query.replace(' ', '+')}"
             
             # Navigate to Google search
@@ -369,7 +429,7 @@ class ListingEnrichmentWorkflow:
             return []
     
     def verify_property_address(self, property_url, target_address):
-        """Verify that the property page is for the correct address"""
+        """Verify that the property page is for the correct address - more flexible matching"""
         try:
             # Determine the site type from URL
             if 'rightmove.co.uk' in property_url:
@@ -395,36 +455,166 @@ class ListingEnrichmentWorkflow:
             city_part = target_parts[1].strip() if len(target_parts) > 1 else ""
             postcode_part = target_parts[-1].strip() if len(target_parts) > 2 else ""
             
-            # Check for address match in page content
-            address_found = False
+            # Clean up street part (remove flat numbers, etc.)
+            street_clean = re.sub(r'^flat\s+\d+[,\s]*', '', street_part)
+            # Don't remove house number for matching - we need it for exact verification
+            street_clean = street_clean.strip()
             
-            # Check if the full address appears in the page
+            # Handle empty street_clean (when flat number was removed)
+            if not street_clean:
+                # Extract the rest of the address after the flat number
+                remaining_parts = target_address.split(',')[1:] if len(target_address.split(',')) > 1 else []
+                if remaining_parts:
+                    street_clean = remaining_parts[0].strip()
+            
+            # Check for address match in page content with strict matching
+            address_found = False
+            match_reason = ""
+            
+            # Strategy 1: Full address match (exact) - highest priority
             if target_address.lower() in page_text.lower():
                 address_found = True
-                print(f"   ✅ Full address match found")
-            # Check if key parts match
-            elif (street_part and street_part in page_text.lower() and 
-                  city_part and city_part in page_text.lower()):
-                address_found = True
-                print(f"   ✅ Street and city match found")
-            # Check if postcode matches
-            elif postcode_part and postcode_part in page_text.lower():
-                address_found = True
-                print(f"   ✅ Postcode match found")
+                match_reason = "Full address match"
             
+            # Strategy 2: Postcode + street number match (very reliable)
+            elif postcode_part and postcode_part in page_text.lower():
+                # Extract house number from street part
+                house_number_match = re.search(r'^(\d+)', street_part)
+                if house_number_match:
+                    house_number = house_number_match.group(1)
+                    if house_number in page_text.lower():
+                        address_found = True
+                        match_reason = f"Postcode + house number match ({house_number})"
+            
+            # Strategy 3: Postcode + street name match (reliable)
+            elif postcode_part and postcode_part in page_text.lower():
+                if street_clean and street_clean in page_text.lower():
+                    address_found = True
+                    match_reason = "Postcode + street name match"
+                else:
+                    # Try matching just the street name without house number
+                    street_name_only = re.sub(r'^\d+\s+', '', street_clean)
+                    if street_name_only and street_name_only in page_text.lower():
+                        address_found = True
+                        match_reason = f"Postcode + street name only match ({street_name_only})"
+            
+            # Strategy 3.5: Handle postcode format variations
+            elif postcode_part:
+                # Try different postcode formats
+                postcode_variations = [
+                    postcode_part,
+                    postcode_part.replace(' ', ''),
+                    postcode_part.upper(),
+                    postcode_part.upper().replace(' ', '')
+                ]
+                
+                for postcode_var in postcode_variations:
+                    if postcode_var in page_text.lower():
+                        # Extract house number from street part
+                        house_number_match = re.search(r'^(\d+)', street_part)
+                        if house_number_match:
+                            house_number = house_number_match.group(1)
+                            if house_number in page_text.lower():
+                                address_found = True
+                                match_reason = f"Postcode variation + house number match ({house_number})"
+                                break
+                        
+                        # Also try with street name (without house number)
+                        if street_clean:
+                            street_name_only = re.sub(r'^\d+\s+', '', street_clean)
+                            if street_name_only and street_name_only in page_text.lower():
+                                address_found = True
+                                match_reason = f"Postcode variation + street name match ({street_name_only})"
+                                break
+            
+            # Strategy 4: Street number + street name + postcode (exact match)
+            elif street_clean:
+                house_number_match = re.search(r'^(\d+)', street_part)
+                if house_number_match:
+                    house_number = house_number_match.group(1)
+                    street_name = street_clean
+                    if (house_number in page_text.lower() and 
+                        street_name in page_text.lower() and 
+                        postcode_part in page_text.lower()):
+                        address_found = True
+                        match_reason = f"House number + street + postcode match ({house_number} {street_name} {postcode_part})"
+            
+            # Strategy 5: House number + street name (without postcode - for cases where postcode format differs)
+            elif street_clean:
+                house_number_match = re.search(r'^(\d+)', street_part)
+                if house_number_match:
+                    house_number = house_number_match.group(1)
+                    street_name = street_clean
+                    if (house_number in page_text.lower() and 
+                        street_name in page_text.lower()):
+                        address_found = True
+                        match_reason = f"House number + street name match ({house_number} {street_name})"
+            
+            # Strategy 5: Check page title for exact address components
             if not address_found:
-                print(f"   ❌ Address not found on Rightmove page")
-                print(f"   Looking for: {target_address}")
-                print(f"   Street part: {street_part}")
-                print(f"   City part: {city_part}")
-                print(f"   Postcode part: {postcode_part}")
+                house_number_match = re.search(r'^(\d+)', street_part)
+                if house_number_match:
+                    house_number = house_number_match.group(1)
+                    if (house_number in page_title.lower() and 
+                        street_clean in page_title.lower() and 
+                        postcode_part in page_title.lower()):
+                        address_found = True
+                        match_reason = "Exact address in page title"
+            
+            if address_found:
+                print(f"   ✅ Address verified: {match_reason}")
+                print(f"   📄 Target: {target_address}")
+                print(f"   📄 Found in: {page_title[:100]}...")
+                return True
+            else:
+                print(f"   ❌ Address not found on {site_name} page")
+                print(f"   📄 Looking for: {target_address}")
+                print(f"   📄 Street part: {street_part}")
+                print(f"   📄 Clean street: {street_clean}")
+                print(f"   📄 Postcode: {postcode_part}")
+                print(f"   📄 Page title: {page_title}")
+                
+                # Show what we found on the page for debugging
+                house_number_match = re.search(r'^(\d+)', street_part)
+                if house_number_match:
+                    house_number = house_number_match.group(1)
+                    print(f"   🔍 Looking for house number: {house_number}")
+                    print(f"   🔍 Looking for street name: {street_clean}")
+                    print(f"   🔍 Looking for postcode: {postcode_part}")
+                    
+                    # Check what's actually on the page
+                    if house_number in page_text.lower():
+                        print(f"   ✅ House number {house_number} found on page")
+                    else:
+                        print(f"   ❌ House number {house_number} NOT found on page")
+                    
+                    if street_clean in page_text.lower():
+                        print(f"   ✅ Street name '{street_clean}' found on page")
+                    else:
+                        print(f"   ❌ Street name '{street_clean}' NOT found on page")
+                    
+                    # Check postcode variations
+                    postcode_variations = [
+                        postcode_part,
+                        postcode_part.replace(' ', ''),
+                        postcode_part.upper(),
+                        postcode_part.upper().replace(' ', '')
+                    ]
+                    
+                    postcode_found = False
+                    for postcode_var in postcode_variations:
+                        if postcode_var in page_text.lower():
+                            print(f"   ✅ Postcode variation '{postcode_var}' found on page")
+                            postcode_found = True
+                            break
+                    
+                    if not postcode_found:
+                        print(f"   ❌ No postcode variations found: {postcode_variations}")
+                
                 return False
             
-            print(f"   ✅ Address verified on Rightmove page")
-            return True
-            
         except Exception as e:
-            print(f"❌ Error verifying Rightmove address: {e}")
+            print(f"❌ Error verifying {site_name} address: {e}")
             return False
     
     def extract_from_propertyengine(self, property_url, auction_name=None, auction_date=None):
@@ -564,6 +754,30 @@ class ListingEnrichmentWorkflow:
             
             time.sleep(5)
             
+            # Get the current PropertyEngine URL - this is what we want as source_url
+            propertyengine_current_url = self.page.url
+            print(f"   🔗 Current PropertyEngine URL: {propertyengine_current_url}")
+            
+            # Validate that we're on a proper PropertyEngine property page
+            if not propertyengine_current_url.startswith('https://propertyengine.co.uk/property/'):
+                print(f"   ⚠️ Not on a PropertyEngine property page, trying to navigate...")
+                
+                # Look for property links on the current page
+                property_links = self.page.query_selector_all('a[href*="/property/"]')
+                if property_links:
+                    print(f"   🔗 Found {len(property_links)} property links, clicking first one...")
+                    property_links[0].click()
+                    time.sleep(3)
+                    propertyengine_current_url = self.page.url
+                    print(f"   🔗 Updated PropertyEngine URL: {propertyengine_current_url}")
+                else:
+                    print(f"   ⚠️ No property links found, using current URL")
+            
+            # Final validation of PropertyEngine URL
+            if not propertyengine_current_url.startswith('https://propertyengine.co.uk/property/'):
+                print(f"   ❌ Invalid PropertyEngine URL: {propertyengine_current_url}")
+                return None
+            
             # Look for the property pop-up that appears after submitting
             print(f"   🔍 Looking for property pop-up...")
             
@@ -624,34 +838,64 @@ class ListingEnrichmentWorkflow:
             # First, try to find guide price in the current page text
             # Prioritize exact "GUIDE PRICE" matches first
             guide_price_patterns = [
-                r'GUIDE\s+PRICE\s*£([\d,]+(?:,\d{3})*\+?)',
+                # Most specific patterns first
+                r'Guide\s+Price\s*[=:]\s*£([\d,]+(?:,\d{3})*\+?)',
                 r'Guide\s+Price\s*£([\d,]+(?:,\d{3})*\+?)',
-                r'£([\d,]+(?:,\d{3})*\+?)\s*GUIDE\s+PRICE',
-                r'£([\d,]+(?:,\d{3})*\+?)\s*Guide\s+Price',
-                r'Guide\s+Price\s*[=:]\s*£([\d,]+(?:,\d{3})*\+?)',
+                r'GUIDE\s+PRICE\s*£([\d,]+(?:,\d{3})*\+?)',
                 r'Guide\s+Price\s*:\s*£([\d,]+(?:,\d{3})*\+?)',
-                # More specific patterns for PropertyEngine
-                r'Guide\s+Price\s*[=:]\s*£([\d,]+(?:,\d{3})*\+?)',
+                # PropertyEngine specific patterns
                 r'Guide\s+Price.*?£([\d,]+(?:,\d{3})*\+?)',
                 r'Guide\s+price.*?£([\d,]+(?:,\d{3})*\+?)',
+                # More flexible patterns
                 r'Guide.*?£([\d,]+(?:,\d{3})*\+?)',
                 r'Estimate.*?£([\d,]+(?:,\d{3})*\+?)',
                 r'Estimated.*?£([\d,]+(?:,\d{3})*\+?)',
+                r'£([\d,]+(?:,\d{3})*\+?)\s*Guide\s+Price',
+                r'£([\d,]+(?:,\d{3})*\+?)\s*GUIDE\s+PRICE',
                 r'£([\d,]+(?:,\d{3})*\+?)\s*guide',
                 r'£([\d,]+(?:,\d{3})*\+?)\s*estimate'
             ]
             
+            # Try to find guide price with context validation
             for pattern in guide_price_patterns:
-                match = re.search(pattern, page_text, re.IGNORECASE)
-                if match:
-                    guide_price = f"£{match.group(1)}"
-                    print(f"   💰 Found guide price: {guide_price}")
-                    print(f"   📄 Pattern matched: {pattern}")
-                    # Show some context around the match
-                    start = max(0, match.start() - 50)
-                    end = min(len(page_text), match.end() + 50)
+                matches = re.finditer(pattern, page_text, re.IGNORECASE)
+                for match in matches:
+                    price_value = match.group(1)
+                    price_num = int(price_value.replace(',', ''))
+                    
+                    # Get context around the match
+                    start = max(0, match.start() - 100)
+                    end = min(len(page_text), match.end() + 100)
                     context = page_text[start:end]
-                    print(f"   📄 Context: ...{context}...")
+                    
+                    # Validate that this is likely a guide price (not a sold price, etc.)
+                    context_lower = context.lower()
+                    invalid_indicators = [
+                        'sold for', 'sold at', 'sold price', 'purchase price',
+                        'last sold', 'previously sold', 'sale price',
+                        'rent', 'rental', 'per month', 'pcm'
+                    ]
+                    
+                    is_valid_guide_price = True
+                    for indicator in invalid_indicators:
+                        if indicator in context_lower:
+                            is_valid_guide_price = False
+                            print(f"   ⚠️ Skipping price £{price_value} - found invalid indicator: {indicator}")
+                            break
+                    
+                    # Check if price is reasonable for a guide price (typically £50k+)
+                    if price_num < 50000:
+                        print(f"   ⚠️ Skipping price £{price_value} - too low for guide price")
+                        continue
+                    
+                    if is_valid_guide_price:
+                        guide_price = f"£{price_value}"
+                        print(f"   💰 Found valid guide price: {guide_price}")
+                        print(f"   📄 Pattern: {pattern}")
+                        print(f"   📄 Context: ...{context}...")
+                        break
+                
+                if guide_price:
                     break
             
             # If not found in page text, try to find it in specific elements
@@ -835,7 +1079,7 @@ class ListingEnrichmentWorkflow:
                     print(f"   ⏭️ No usable timeline data, but keeping guide price")
                     # Return guide price even if timeline has no usable data
                     return {
-                        'source_url': property_url,  # Keep original property URL
+                        'source_url': propertyengine_current_url,  # Use PropertyEngine URL
                         'guide_price': guide_price if guide_price else ''
                     }
                 # Extract sold date from the found sold entry
@@ -988,8 +1232,8 @@ class ListingEnrichmentWorkflow:
                     if view_listing_links:
                         print(f"   ✅ Found {len(view_listing_links)} view listing links")
                         
-                        # Initialize source_url to fallback value
-                        source_url = property_url
+                        # Initialize source_url to PropertyEngine URL
+                        source_url = propertyengine_current_url
                         suitable_listing_found = False
                         
                         # Check each listing link to see if it meets our criteria
@@ -1129,7 +1373,7 @@ class ListingEnrichmentWorkflow:
                                 print(f"   ✅ Suitable listing found and source_url set")
                     else:
                         print(f"   ⚠️ No view listing links found in timeline")
-                        source_url = property_url  # Fallback to original property URL
+                        source_url = propertyengine_current_url  # Use PropertyEngine URL
                 else:
                     print(f"   ⚠️ No 'property sold for xxx' found in timeline")
                     print(f"   🔍 Checking all view listing links within 12 months...")
@@ -1142,8 +1386,8 @@ class ListingEnrichmentWorkflow:
                     if all_view_listing_links:
                         print(f"   ✅ Found {len(all_view_listing_links)} view listing links to check")
                         
-                        # Initialize source_url to fallback value
-                        source_url = property_url
+                        # Initialize source_url to PropertyEngine URL
+                        source_url = propertyengine_current_url
                         suitable_listing_found = False
                         
                         # Check each view listing link
@@ -1278,7 +1522,7 @@ class ListingEnrichmentWorkflow:
                             print(f"   ⏭️ No usable timeline data, but keeping guide price")
                             # Return guide price even if timeline has no usable data
                             return {
-                                'source_url': property_url,  # Keep original property URL
+                                'source_url': propertyengine_current_url,  # Use PropertyEngine URL
                                 'guide_price': guide_price if guide_price else ''
                             }
                     else:
@@ -1286,13 +1530,13 @@ class ListingEnrichmentWorkflow:
                         print(f"   ⏭️ No usable timeline data, but keeping guide price")
                         # Return guide price even if timeline has no usable data
                         return {
-                            'source_url': property_url,  # Keep original property URL
+                            'source_url': propertyengine_current_url,  # Use PropertyEngine URL
                             'guide_price': guide_price if guide_price else ''
                         }
             else:
                 print(f"   ⚠️ No timeline section found")
                 print(f"   ⏭️ No timeline data, but keeping guide price")
-                source_url = property_url  # Fallback to original property URL
+                source_url = propertyengine_current_url  # Use PropertyEngine URL
             
             if guide_price:
                 print(f"   ✅ Successfully extracted guide price: {guide_price}")
@@ -1318,49 +1562,90 @@ class ListingEnrichmentWorkflow:
                 pass
             return None
     
-    def update_spreadsheet_row(self, row_data, new_data):
-        """Update a row in the Google Sheet with new data"""
+    # Note: delete_imported_row function removed - now using update_row instead of add+delete approach
+
+    def update_spreadsheet_row(self, row_data, new_data, sheet_name='AUCTIONS_MASTER'):
+        """Update existing row in the specified Google Sheet with enriched data"""
         try:
-            # Prepare update payload
-            update_payload = {
-                'token': self.sheets_manager.shared_token,
-                'action': 'update_row',
-                'sheet_id': os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q'),
-                'row_data': {
-                    'auction_name': row_data.get('auction_name', ''),
-                    'auction_date': row_data.get('auction_date', ''),
-                    'address': row_data.get('address', ''),
-                    'auction_sale': row_data.get('auction_sale', ''),
-                    'lot_number': row_data.get('lot_number', ''),
-                    'postcode': row_data.get('postcode', ''),
-                    'purchase_price': row_data.get('purchase_price', ''),
-                    'sold_date': row_data.get('sold_date', ''),
-                    'auction_url': row_data.get('auction_url', ''),
-                    'source_url': new_data.get('source_url', row_data.get('source_url', '')),
-                    'guide_price': new_data.get('guide_price', row_data.get('guide_price', '')),
-                    'owner': row_data.get('owner', ''),
-                    'qa_status': 'enriched'
-                }
+            print(f"📝 Updating existing row with enriched data in {sheet_name}...")
+            
+            # First, find the row to update
+            webapp_url = self.sheets_manager.webapp_url
+            shared_token = self.sheets_manager.shared_token
+            
+            # Read current data to find the row index
+            read_payload = {
+                'token': shared_token,
+                'action': 'read',
+                'sheet_id': os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q')
             }
             
-            # Send update request
-            import requests
-            response = requests.post(self.sheets_manager.webapp_url, json=update_payload, timeout=30)
-            
+            response = requests.post(webapp_url, json=read_payload, timeout=30)
             if response.status_code == 200:
                 result = response.json()
-                if result.get('ok'):
-                    print(f"✅ Successfully updated spreadsheet row")
-                    return True
+                if result.get('ok') and result.get('rows'):
+                    rows = result.get('rows', [])
+                    
+                    # Find the target row to update
+                    target_row_index = None
+                    for i, row in enumerate(rows):
+                        # Match by address, lot_number, auction_date, and qa_status
+                        if (row.get('address') == row_data.get('address') and
+                            row.get('lot_number') == row_data.get('lot_number') and
+                            row.get('auction_date') == row_data.get('auction_date') and
+                            row.get('qa_status') == 'imported'):
+                            
+                            target_row_index = i
+                            print(f"📋 Found target row at index {i}: {row.get('address', 'N/A')}")
+                            break
+                    
+                    if target_row_index is not None:
+                        # Create updated row data with enriched information
+                        updated_row_data = row_data.copy()  # Start with exact copy of original data
+                        
+                        # Only update the fields that are being enriched
+                        updated_row_data['source_url'] = new_data.get('source_url', '')
+                        updated_row_data['guide_price'] = new_data.get('guide_price', '')
+                        updated_row_data['qa_status'] = 'enriched'
+                        
+                        # Ensure all other fields remain exactly the same as the original
+                        # This includes auction_date, purchase_price format, etc.
+                        
+                        # Update the existing row using the fixed update_row functionality
+                        update_payload = {
+                            'token': shared_token,
+                            'action': 'update_row',
+                            'sheet_id': os.getenv('GOOGLE_SHEETS_ID', '1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q'),
+                            'row_index': target_row_index,
+                            'row_data': updated_row_data
+                        }
+                        
+                        update_response = requests.post(webapp_url, json=update_payload, timeout=30)
+                        
+                        if update_response.status_code == 200:
+                            update_result = update_response.json()
+                            if update_result.get('ok'):
+                                print(f"✅ Successfully updated existing row with enriched data in {sheet_name}!")
+                                print(f"📋 Response: {update_result}")
+                                return True
+                            else:
+                                print(f"❌ Failed to update row: {update_result.get('error', 'Unknown error')}")
+                                return False
+                        else:
+                            print(f"❌ HTTP error updating row: {update_response.status_code}")
+                            return False
+                    else:
+                        print(f"⚠️ Could not find target row to update in {sheet_name}")
+                        return False
                 else:
-                    print(f"❌ Failed to update spreadsheet: {result}")
+                    print(f"❌ Could not fetch data from Google Sheet")
                     return False
             else:
-                print(f"❌ HTTP error updating spreadsheet: {response.status_code}")
+                print(f"❌ HTTP error fetching from Google Sheet: {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"❌ Error updating spreadsheet: {e}")
+            print(f"❌ Error updating row in spreadsheet: {e}")
             return False
     
     def process_missing_row(self, row_info):
@@ -1399,7 +1684,8 @@ class ListingEnrichmentWorkflow:
                 print(f"   ✅ Successfully extracted data from PropertyEngine!")
                 
                 # Update the spreadsheet
-                update_success = self.update_spreadsheet_row(row_data, result)
+                sheet_name = row_info.get('sheet_name', 'AUCTIONS_MASTER')
+                update_success = self.update_spreadsheet_row(row_data, result, sheet_name)
                 
                 if update_success:
                     print(f"   ✅ Successfully updated spreadsheet")

@@ -252,7 +252,7 @@ class MainWorkflowController:
                     'auction_url': property_data.get('auction_url', ''),
                     'source_url': property_data.get('source_url', ''),
                     'guide_price': property_data.get('guide_price', ''),
-                    'owner': property_data.get('owner', ''),
+
                     'qa_status': property_data.get('qa_status', 'pending_enrichment'),
                     'added_to_potential_trades': property_data.get('added_to_potential_trades', ''),
                     'ingested_at': property_data.get('added_timestamp', datetime.now().isoformat())
@@ -281,14 +281,11 @@ class MainWorkflowController:
     
     def process_potential_trades(self):
         """
-        Process entries in POTENTIAL_TRADES that are 3+ months old
-        
-        Returns:
-            int: Number of entries processed
+        Process POTENTIAL_TRADES entries with PropertyEngine enrichment.
         """
-        print(f"\n🔄 Processing POTENTIAL_TRADES entries...")
-        
         try:
+            print(f"🔄 Processing POTENTIAL_TRADES entries...")
+            
             # Read POTENTIAL_TRADES data
             payload = {
                 'token': self.sheets_manager.shared_token,
@@ -300,131 +297,251 @@ class MainWorkflowController:
             response = requests.post(self.sheets_manager.webapp_url, json=payload, timeout=30)
             
             if response.status_code != 200:
-                print(f"   ❌ Failed to read POTENTIAL_TRADES: {response.status_code}")
+                print(f"❌ Failed to read POTENTIAL_TRADES: {response.status_code}")
                 return 0
             
             result = response.json()
             if not result.get('ok'):
-                print(f"   ❌ Failed to read POTENTIAL_TRADES: {result}")
+                print(f"❌ Failed to read POTENTIAL_TRADES: {result}")
                 return 0
             
-            entries = result.get('rows', [])
-            print(f"   📊 Found {len(entries)} entries in POTENTIAL_TRADES")
+            potential_trades = result.get('rows', [])
+            print(f"✅ Found {len(potential_trades)} entries in POTENTIAL_TRADES")
             
+            if not potential_trades:
+                print("📋 No POTENTIAL_TRADES entries to process")
+                return 0
+            
+            # Process each entry with PropertyEngine enrichment
             processed_count = 0
-            current_date = datetime.now()
-            
-            for entry in entries:
-                added_date_str = entry.get('added_to_potential_trades', '')
-                if not added_date_str:
+            for i, entry in enumerate(potential_trades):
+                print(f"\n🔍 Processing POTENTIAL_TRADES entry {i+1}/{len(potential_trades)}")
+                print(f"   Address: {entry.get('address', 'No address')}")
+                
+                # Check if already has source_url
+                if entry.get('source_url') and entry.get('source_url').strip():
+                    print(f"   ⏭️ Already has source_url, skipping")
                     continue
                 
+                # Run PropertyEngine enrichment
                 try:
-                    added_date = datetime.fromisoformat(added_date_str.replace('Z', '+00:00'))
-                    date_diff = relativedelta(current_date, added_date)
-                    months_diff = date_diff.years * 12 + date_diff.months
-                    
-                    if months_diff >= self.potential_trades_delay_months:
-                        print(f"   🔍 Processing entry: {entry.get('address', 'Unknown')} ({months_diff} months old)")
-                        
-                        # Run PropertyEngine enrichment
-                        result = self.enrichment_workflow.extract_from_propertyengine(
-                            entry.get('auction_url', ''),
-                            entry.get('auction_name'),
-                            entry.get('auction_date')
-                        )
-                        
-                        if result:
-                            # Update entry with enrichment results
-                            entry['source_url'] = result.get('source_url', entry.get('auction_url', ''))
-                            entry['guide_price'] = result.get('guide_price', entry.get('guide_price', ''))
-                            entry['qa_status'] = 'enriched'
-                            
-                            # Check purchase price criteria again
-                            meets_criteria = self.check_purchase_price_criteria(entry)
-                            
-                            if meets_criteria:
-                                # Move to AUCTION_MASTER
-                                success = self.sheets_manager.add_property(entry)
-                                if success:
-                                    print(f"   ✅ Moved to AUCTION_MASTER")
-                                    # TODO: Remove from POTENTIAL_TRADES
-                                    processed_count += 1
-                                else:
-                                    print(f"   ❌ Failed to move to AUCTION_MASTER")
-                            else:
-                                print(f"   ❌ Still doesn't meet criteria - DELETE")
-                                # TODO: Remove from POTENTIAL_TRADES (DELETE)
+                    enriched_data = self.enrich_with_propertyengine(entry)
+                    if enriched_data:
+                        # Update the entry in POTENTIAL_TRADES
+                        update_result = self.update_potential_trades_entry(entry, enriched_data)
+                        if update_result:
+                            processed_count += 1
+                            print(f"   ✅ Successfully enriched and updated")
                         else:
-                            print(f"   ❌ Enrichment failed")
-                            # TODO: Remove from POTENTIAL_TRADES (DELETE)
-                    
+                            print(f"   ❌ Failed to update entry")
+                    else:
+                        print(f"   ⏭️ No enrichment data found")
+                        
                 except Exception as e:
-                    print(f"   ❌ Error processing entry: {e}")
+                    print(f"   ❌ Error enriching entry: {e}")
                     continue
             
-            print(f"   ✅ Processed {processed_count} entries from POTENTIAL_TRADES")
+            print(f"\n📊 POTENTIAL_TRADES processing completed: {processed_count} entries enriched")
             return processed_count
             
         except Exception as e:
-            print(f"   ❌ Error processing POTENTIAL_TRADES: {e}")
+            print(f"❌ Error processing POTENTIAL_TRADES: {e}")
             return 0
+    
+    def enrich_with_propertyengine(self, entry):
+        """
+        Enrich a POTENTIAL_TRADES entry with PropertyEngine data.
+        """
+        try:
+            address = entry.get('address', '')
+            if not address:
+                return None
+            
+            print(f"      🔍 Running PropertyEngine enrichment for: {address}")
+            
+            # Import and run the PropertyEngine enrichment
+            from run_listing_enrichment_workflow import ListingEnrichmentWorkflow
+            
+            # Create enrichment workflow instance
+            enrichment_workflow = ListingEnrichmentWorkflow()
+            
+            # Start browser
+            enrichment_workflow.start_browser()
+            
+            try:
+                # Create row data structure that the enrichment expects
+                row_data = {
+                    'address': address,
+                    'auction_name': entry.get('auction_name', ''),
+                    'auction_date': entry.get('auction_date', ''),
+                    'guide_price': entry.get('guide_price', ''),
+                    'source_url': entry.get('source_url', '')
+                }
+                
+                # Create row info structure
+                row_info = {
+                    'row_data': row_data,
+                    'missing_guide_price': not entry.get('guide_price'),
+                    'missing_source_url': not entry.get('source_url')
+                }
+                
+                # Process the row using the enrichment workflow
+                success = enrichment_workflow.process_missing_row(row_info)
+                
+                if success:
+                    # Get the updated data from the enrichment
+                    # The enrichment workflow updates the spreadsheet directly
+                    # So we need to read the updated data back
+                    updated_data = self.get_updated_entry_data(entry)
+                    if updated_data:
+                        print(f"      ✅ Successfully enriched with PropertyEngine")
+                        return updated_data
+                    else:
+                        print(f"      ⏭️ Enrichment succeeded but couldn't read updated data")
+                        return None
+                else:
+                    print(f"      ⏭️ PropertyEngine enrichment failed")
+                    return None
+                    
+            finally:
+                # Always close the browser
+                enrichment_workflow.close_browser()
+                
+        except Exception as e:
+            print(f"      ❌ Error in PropertyEngine enrichment: {e}")
+            return None
+    
+    def get_updated_entry_data(self, original_entry):
+        """
+        Get the updated entry data after PropertyEngine enrichment.
+        """
+        try:
+            # Read the POTENTIAL_TRADES data again to get the updated entry
+            payload = {
+                'token': self.sheets_manager.shared_token,
+                'action': 'read',
+                'sheet_name': 'POTENTIAL_TRADES'
+            }
+            
+            import requests
+            response = requests.post(self.sheets_manager.webapp_url, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('ok'):
+                    potential_trades = result.get('rows', [])
+                    
+                    # Find the matching entry
+                    for entry in potential_trades:
+                        if (entry.get('address') == original_entry.get('address') and 
+                            entry.get('auction_name') == original_entry.get('auction_name') and
+                            entry.get('auction_date') == original_entry.get('auction_date')):
+                            
+                            # Check if source_url was updated
+                            if entry.get('source_url') and entry.get('source_url') != original_entry.get('source_url'):
+                                return {
+                                    'source_url': entry.get('source_url'),
+                                    'guide_price': entry.get('guide_price', original_entry.get('guide_price'))
+                                }
+                    
+                    print(f"      ⚠️ Couldn't find updated entry data")
+                    return None
+                else:
+                    print(f"      ❌ Failed to read updated data: {result}")
+                    return None
+            else:
+                print(f"      ❌ HTTP error reading updated data: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"      ❌ Error getting updated entry data: {e}")
+            return None
+    
+    def update_potential_trades_entry(self, original_entry, enriched_data):
+        """
+        Update a POTENTIAL_TRADES entry with enriched data.
+        """
+        try:
+            # Prepare update data
+            update_data = {
+                'auction_name': original_entry.get('auction_name', ''),
+                'auction_date': original_entry.get('auction_date', ''),
+                'address': original_entry.get('address', ''),
+                'auction_sale': original_entry.get('auction_sale', ''),
+                'guide_price': original_entry.get('guide_price', ''),
+                'lot_number': original_entry.get('lot_number', ''),
+                'postcode': original_entry.get('postcode', ''),
+                'purchase_price': original_entry.get('purchase_price', ''),
+                'sold_date': original_entry.get('sold_date', ''),
+                'auction_url': original_entry.get('auction_url', ''),
+                'source_url': enriched_data.get('source_url', original_entry.get('source_url', '')),
+                'added_to_potential_trades': original_entry.get('added_to_potential_trades', ''),
+                'qa_status': 'enriched'
+            }
+            
+            # Update the entry
+            payload = {
+                'token': self.sheets_manager.shared_token,
+                'action': 'update_row',
+                'sheet_name': 'POTENTIAL_TRADES',
+                'row_data': update_data
+            }
+            
+            import requests
+            response = requests.post(self.sheets_manager.webapp_url, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('ok'):
+                    return True
+                else:
+                    print(f"      ❌ Update failed: {result.get('error', 'Unknown error')}")
+                    return False
+            else:
+                print(f"      ❌ HTTP error {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"      ❌ Error updating entry: {e}")
+            return False
     
     def run_full_workflow(self):
         """
         Run the complete workflow:
-        1. Run EIG scraping for different date ranges (0-3 months, 3-12 months)
-        2. Process the scraped data with date-based categorization
-        3. Route to appropriate processing (AUCTION_MASTER vs POTENTIAL_TRADES)
-        4. Process POTENTIAL_TRADES
+        1. Scrape ALL auctions from the last 12 months and import immediately after each auction
+        2. Process POTENTIAL_TRADES for enrichment
         """
         print("🚀 Starting Main Workflow Controller")
         print("=" * 50)
         
         try:
-            # Calculate date ranges for scraping
+            # Calculate date range for ALL auctions (last 12 months)
             current_date = datetime.now()
+            all_auctions_start_date = (current_date - relativedelta(months=12)).strftime('%Y-%m-%d')
+            all_auctions_end_date = current_date.strftime('%Y-%m-%d')
             
-            # NEWER auctions: 0-3 months ago
-            newer_start_date = (current_date - relativedelta(months=3)).strftime('%Y-%m-%d')
-            newer_end_date = current_date.strftime('%Y-%m-%d')
+            print(f"📅 Scraping ALL auctions from the last 12 months:")
+            print(f"   Date range: {all_auctions_start_date} to {all_auctions_end_date}")
+            print(f"   Current date: {current_date.strftime('%Y-%m-%d')}")
             
-            # OLDER auctions: 3-12 months ago
-            older_start_date = (current_date - relativedelta(months=12)).strftime('%Y-%m-%d')
-            older_end_date = (current_date - relativedelta(months=3)).strftime('%Y-%m-%d')
-            
-            print(f"📅 Date Ranges for Scraping:")
-            print(f"   NEWER (0-3 months): {newer_start_date} to {newer_end_date}")
-            print(f"   OLDER (3-12 months): {older_start_date} to {older_end_date}")
-            
-            # Step 1: Scrape NEWER auctions (0-3 months)
-            print(f"\n📊 Step 1: Scraping NEWER auctions (0-3 months)...")
+            # Step 1: Scrape ALL auctions and import immediately after each auction
+            print(f"\n📊 Step 1: Scraping and importing auctions from the last 12 months...")
             try:
                 import eig
-                newer_result = eig.process_auctions_to_sheets(newer_start_date, newer_end_date)
-                print(f"✅ NEWER auctions scraping completed: {newer_result}")
+                all_lots = eig.scrape_auctions_without_import(all_auctions_start_date, all_auctions_end_date)
+                print(f"✅ ALL auctions scraping and importing completed: {len(all_lots)} lots processed")
             except Exception as e:
-                print(f"❌ Error scraping NEWER auctions: {e}")
-                newer_result = {"status": "error", "total_imported": 0}
+                print(f"❌ Error scraping and importing auctions: {e}")
+                all_lots = []
             
-            # Step 2: Scrape OLDER auctions (3-12 months)
-            print(f"\n📊 Step 2: Scraping OLDER auctions (3-12 months)...")
-            try:
-                older_result = eig.process_auctions_to_sheets(older_start_date, older_end_date)
-                print(f"✅ OLDER auctions scraping completed: {older_result}")
-            except Exception as e:
-                print(f"❌ Error scraping OLDER auctions: {e}")
-                older_result = {"status": "error", "total_imported": 0}
-            
-            # Step 3: Process POTENTIAL_TRADES
-            print(f"\n🔄 Step 3: Processing POTENTIAL_TRADES...")
+            # Step 2: Process POTENTIAL_TRADES for enrichment
+            print(f"\n🔄 Step 2: Processing POTENTIAL_TRADES for enrichment...")
             potential_processed = self.process_potential_trades()
             print(f"   POTENTIAL_TRADES entries processed: {potential_processed}")
             
             # Summary
             print(f"\n📊 Final Summary:")
-            print(f"   NEWER auctions imported: {newer_result.get('total_imported', 0)}")
-            print(f"   OLDER auctions imported: {older_result.get('total_imported', 0)}")
+            print(f"   Total lots scraped and imported: {len(all_lots)}")
             print(f"   POTENTIAL_TRADES processed: {potential_processed}")
             
             print("\n✅ Main workflow completed successfully!")
@@ -433,6 +550,186 @@ class MainWorkflowController:
             print(f"❌ Error in main workflow: {e}")
             import traceback
             traceback.print_exc()
+
+    def process_newer_lot(self, lot):
+        """
+        Process a NEWER lot (0-3 months old).
+        Everything goes to POTENTIAL_TRADES unless it has purchase_price, then AUCTION_MASTER.
+        PropertyEngine enrichment will happen later in post-import processing.
+        """
+        try:
+            print(f"   🔍 Processing NEWER lot: {lot.get('address', 'No address')}")
+            
+            # Skip land/garage/part of lots
+            address = lot.get('address', '').lower()
+            if any(keyword in address for keyword in ['land', 'garage', 'plot', 'parking space', 'car park', 'part of']):
+                print(f"   ⏭️ Skipping - land/garage/part of lot: {lot.get('address', 'No address')}")
+                return False
+            
+            # Check if lot has purchase_price
+            has_purchase_price = lot.get('purchase_price') and lot.get('purchase_price') != 'Not found'
+            
+            if has_purchase_price:
+                print(f"   ✅ Direct import to AUCTION_MASTER - has purchase price")
+                return self.import_lot_to_auction_master(lot)
+            else:
+                print(f"   📋 Adding to POTENTIAL_TRADES - no purchase price")
+                return self.import_lot_to_potential_trades(lot)
+                
+        except Exception as e:
+            print(f"   ❌ Error processing NEWER lot: {e}")
+            return False
+    
+    def process_older_lot(self, lot):
+        """
+        Process an OLDER lot (3-12 months old).
+        Only import to AUCTION_MASTER if it has purchase_price, otherwise skip.
+        PropertyEngine enrichment will happen later in post-import processing.
+        """
+        try:
+            print(f"   🔍 Processing OLDER lot: {lot.get('address', 'No address')}")
+            
+            # Skip land/garage/part of lots
+            address = lot.get('address', '').lower()
+            if any(keyword in address for keyword in ['land', 'garage', 'plot', 'parking space', 'car park', 'part of']):
+                print(f"   ⏭️ Skipping - land/garage/part of lot: {lot.get('address', 'No address')}")
+                return False
+            
+            # Check if lot has purchase_price
+            has_purchase_price = lot.get('purchase_price') and lot.get('purchase_price') != 'Not found'
+            
+            if has_purchase_price:
+                print(f"   ✅ Direct import to AUCTION_MASTER - has purchase price")
+                return self.import_lot_to_auction_master(lot)
+            else:
+                print(f"   ⏭️ Skipping - no purchase price")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Error processing OLDER lot: {e}")
+            return False
+    
+    def check_purchase_price_criteria_for_lot(self, lot):
+        """
+        Check if a lot meets the purchase price criteria (sold within 6 months).
+        """
+        purchase_price = lot.get('purchase_price', '')
+        sold_date = lot.get('sale_date', '')
+        
+        if isinstance(purchase_price, int):
+            has_purchase_price = purchase_price > 0
+        else:
+            has_purchase_price = purchase_price and str(purchase_price).strip() and str(purchase_price) != 'Not found'
+        
+        if not has_purchase_price:
+            print(f"      ❌ No purchase price found")
+            return False
+        
+        if sold_date:
+            try:
+                if 'T' in sold_date:
+                    sold_date_clean = sold_date.split('T')[0]
+                else:
+                    sold_date_clean = sold_date
+                
+                sold_date_obj = datetime.strptime(sold_date_clean, '%Y-%m-%d')
+                current_date = datetime.now()
+                
+                date_diff = relativedelta(current_date, sold_date_obj)
+                months_diff = date_diff.years * 12 + date_diff.months
+                
+                print(f"      📅 Sold date: {sold_date}")
+                print(f"      📊 Months since sold: {months_diff}")
+                
+                if months_diff < 6:
+                    print(f"      ✅ Purchase price criteria met (< 6 months)")
+                    return True
+                else:
+                    print(f"      ❌ Sold date too old (≥ 6 months)")
+                    return False
+                    
+            except Exception as e:
+                print(f"      ⚠️ Error parsing sold date: {e}")
+                return False
+        else:
+            print(f"      ❌ No sold date found")
+            return False
+    
+    def import_lot_to_auction_master(self, lot):
+        """
+        Import a lot directly to AUCTION_MASTER.
+        """
+        try:
+            property_data = {
+                'auction_name': lot.get('auction_name', ''),
+                'auction_date': lot.get('auction_date', ''),
+                'address': lot.get('address', ''),
+                'auction_sale': lot.get('auction_sale', ''),
+                'guide_price': lot.get('guide_price', ''),
+                'lot_number': lot.get('lot_number', ''),
+                'postcode': lot.get('postcode', ''),
+                'purchase_price': lot.get('purchase_price', ''),
+                'sold_date': lot.get('sale_date', ''),
+                'auction_url': lot.get('lot_url', ''),
+                'source_url': lot.get('source_url', ''),
+                'qa_status': 'imported'
+            }
+            
+            # Ensure all required fields have at least empty string values
+            for field in ['auction_name', 'auction_date', 'address', 'auction_sale', 'lot_number', 'postcode', 'purchase_price', 'sold_date', 'auction_url']:
+                if field not in property_data or property_data[field] is None:
+                    property_data[field] = ''
+            
+            result = self.sheets_manager.process_property_data(property_data)
+            if result.get('status') == 'success':
+                print(f"      ✅ Successfully imported to AUCTION_MASTER")
+                return True
+            else:
+                print(f"      ❌ Failed to import to AUCTION_MASTER: {result.get('message', 'Unknown error')}")
+                return False
+                
+        except Exception as e:
+            print(f"      ❌ Error importing to AUCTION_MASTER: {e}")
+            return False
+    
+    def import_lot_to_potential_trades(self, lot):
+        """
+        Import a lot to POTENTIAL_TRADES.
+        """
+        try:
+            property_data = {
+                'auction_name': lot.get('auction_name', ''),
+                'auction_date': lot.get('auction_date', ''),
+                'address': lot.get('address', ''),
+                'auction_sale': lot.get('auction_sale', ''),
+                'guide_price': lot.get('guide_price', ''),
+                'lot_number': lot.get('lot_number', ''),
+                'postcode': lot.get('postcode', ''),
+                'purchase_price': lot.get('purchase_price', ''),
+                'sold_date': lot.get('sale_date', ''),
+                'auction_url': lot.get('lot_url', ''),
+                'source_url': lot.get('source_url', ''),
+                'added_to_potential_trades': 'yes',
+                'qa_status': 'pending'
+            }
+            
+            # Ensure all required fields have at least empty string values
+            for field in ['auction_name', 'auction_date', 'address', 'auction_sale', 'lot_number', 'postcode', 'purchase_price', 'sold_date', 'auction_url']:
+                if field not in property_data or property_data[field] is None:
+                    property_data[field] = ''
+            
+            # Import to POTENTIAL_TRADES tab
+            result = self.sheets_manager.process_property_data_to_tab(property_data, 'POTENTIAL_TRADES')
+            if result.get('status') == 'success':
+                print(f"      ✅ Successfully imported to POTENTIAL_TRADES")
+                return True
+            else:
+                print(f"      ❌ Failed to import to POTENTIAL_TRADES: {result.get('message', 'Unknown error')}")
+                return False
+                
+        except Exception as e:
+            print(f"      ❌ Error importing to POTENTIAL_TRADES: {e}")
+            return False
 
 def main():
     """Main entry point"""

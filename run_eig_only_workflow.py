@@ -45,7 +45,28 @@ def main():
         print("   (No Searchland integration - owner and listing data will be empty)")
         print()
         
-        result = process_auctions_to_sheets(start_date, end_date)
+        # Create a browser context for street history checking
+        from playwright.sync_api import sync_playwright
+        import os
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            
+            # Check if session file exists, otherwise create context without it
+            session_file = "sessions/eig.json"
+            if os.path.exists(session_file):
+                print("Using existing EIG session file for authentication")
+                context = browser.new_context(storage_state=session_file)
+            else:
+                print("No EIG session file found, creating new context")
+                context = browser.new_context()
+                
+            page = context.new_page()
+            
+            try:
+                result = process_auctions_to_sheets(start_date, end_date, page)
+            finally:
+                browser.close()
         
         print()
         print("=" * 50)

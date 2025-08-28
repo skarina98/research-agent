@@ -1,373 +1,545 @@
-const SHEET_ID = "1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q"; // your actual Google Sheet ID
+/**
+ * Google Apps Script for Property Data Management
+ * Fixed version with working update_row functionality
+ */
+
+// Configuration
+const SHEET_ID = "1ONZrugWl0amSFqGLq3_hHmR82Bps-vNxr-25gGk8B9Q";
 const SHARED_TOKEN =
-  "3c4ebe48f035fd3f68ccd5c9f619d7aa3f686d2d7637dc54324d979acc066feb"; // your shared secret
-const DEFAULT_TAB_NAME = "AUCTIONS_MASTER";
+  "3c4ebe48f035fd3f68ccd5c9f619d7aa3f686d2d7637dc54324d979acc066feb";
+
+// Sheet names
+const SHEET_NAMES = {
+  AUCTIONS_MASTER: "AUCTIONS_MASTER",
+  POTENTIAL_TRADES: "POTENTIAL_TRADES",
+};
 
 function doPost(e) {
   try {
-    const requestData = JSON.parse(e.postData.contents);
-    const { token, action, rows, row_data, sheet_id, sheet_name } = requestData;
+    const data = JSON.parse(e.postData.contents);
 
-    if (token !== SHARED_TOKEN) {
+    // Validate token
+    if (data.token !== SHARED_TOKEN) {
       return ContentService.createTextOutput(
-        JSON.stringify({ ok: false, error: "Invalid token" })
+        JSON.stringify({
+          ok: false,
+          error: "Invalid token",
+        })
       ).setMimeType(ContentService.MimeType.JSON);
     }
 
-    const sheetId = sheet_id || SHEET_ID;
-    const tabName = sheet_name || DEFAULT_TAB_NAME;
-
-    // Debug logging
-    Logger.log(`Requested sheet_name: ${sheet_name}`);
-    Logger.log(`Using tabName: ${tabName}`);
-
-    const sheet = SpreadsheetApp.openById(sheetId).getSheetByName(tabName);
-
-    if (!sheet) {
-      Logger.log(`Sheet '${tabName}' not found`);
-      return ContentService.createTextOutput(
-        JSON.stringify({ ok: false, error: `Sheet '${tabName}' not found` })
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    Logger.log(`Successfully found sheet: ${sheet.getName()}`);
+    const action = data.action;
 
     switch (action) {
       case "add":
-        return handleAdd(sheet, rows, tabName);
+        return handleAdd(data);
+      case "update":
+        return handleUpdate(data);
       case "read":
-        return handleRead(sheet, tabName);
+        return handleRead(data);
       case "update_row":
-        return handleUpdateRow(sheet, row_data, tabName);
+        return handleUpdateRow(data);
       case "delete_row":
-        return handleDeleteRow(sheet, row_data, tabName);
+        return handleDeleteRow(data);
       default:
         return ContentService.createTextOutput(
-          JSON.stringify({ ok: false, error: "Invalid action" })
+          JSON.stringify({
+            ok: false,
+            error: "Unknown action: " + action,
+          })
         ).setMimeType(ContentService.MimeType.JSON);
     }
   } catch (error) {
-    Logger.log(`Error in doPost: ${error.toString()}`);
     return ContentService.createTextOutput(
-      JSON.stringify({ ok: false, error: error.toString() })
+      JSON.stringify({
+        ok: false,
+        error: "Error processing request: " + error.toString(),
+      })
     ).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
-function handleAdd(sheet, rows, tabName) {
+function handleAdd(data) {
   try {
-    Logger.log(`Adding ${rows.length} rows to sheet: ${tabName}`);
+    const sheet = SpreadsheetApp.openById(SHEET_ID);
+    const rows = data.rows || [];
 
-    let addedCount = 0;
-    const headers = sheet.getDataRange().getValues()[0];
+    let totalAdded = 0;
+    let totalSkipped = 0;
+    let totalUpdated = 0;
 
-    Logger.log(`Headers in ${tabName}: ${headers.join(", ")}`);
+    for (const row of rows) {
+      try {
+        // Determine which sheet to use based on transaction type and purchase price
+        const transactionType =
+          row.transaction_type || "estate agent to auction";
+        const hasPurchasePrice =
+          row.purchase_price && row.purchase_price.trim() !== "";
 
-    for (const rowData of rows) {
-      const row = headers.map((header) => {
-        switch (header) {
-          case "auction_name":
-            return rowData.auction_name || "";
-          case "auction_date":
-            return rowData.auction_date || "";
-          case "address":
-            return rowData.address || "";
-          case "auction_sale":
-            return rowData.auction_sale || "";
-          case "lot_number":
-            return rowData.lot_number || "";
-          case "postcode":
-            return rowData.postcode || "";
-          case "purchase_price":
-            return rowData.purchase_price || "";
-          case "sold_date":
-            return rowData.sold_date || "";
-          case "owner":
-            return rowData.owner || "";
-          case "guide_price":
-            return rowData.guide_price || "";
-          case "auction_url":
-            return rowData.auction_url || "";
-          case "source_url":
-            return rowData.source_url || "";
-          case "qa_status":
-            return rowData.qa_status || "imported";
-          case "added_to_potential_trades":
-            return rowData.added_to_potential_trades || "";
-          case "ingested_at":
-            return rowData.ingested_at || new Date().toISOString();
-          default:
-            return "";
+        // Route to AUCTIONS_MASTER if:
+        // 1. Transaction type is "auction to auction" (has relevant auction entries), OR
+        // 2. Has purchase price (property prices found)
+        const targetSheetName =
+          transactionType === "auction to auction" || hasPurchasePrice
+            ? SHEET_NAMES.AUCTIONS_MASTER
+            : SHEET_NAMES.POTENTIAL_TRADES;
+        const targetSheet = sheet.getSheetByName(targetSheetName);
+
+        if (!targetSheet) {
+          console.log(`Sheet ${targetSheetName} not found, skipping row`);
+          totalSkipped++;
+          continue;
         }
-      });
 
-      sheet.appendRow(row);
-      addedCount++;
-    }
+        // Get headers and row data for the specific sheet
+        const headers = getHeadersForSheet(targetSheetName);
+        const rowData = getRowDataForSheet(row, targetSheetName);
 
-    Logger.log(`Successfully added ${addedCount} rows to ${tabName}`);
+        // Check if this property already exists (by lot number, auction name, and auction date)
+        const existingRow = findExistingRow(targetSheet, row);
 
-    return ContentService.createTextOutput(
-      JSON.stringify({
-        ok: true,
-        count: addedCount,
-        message: `Added ${addedCount} rows to ${tabName}`,
-        sheet_name: tabName,
-      })
-    ).setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log(`Error in handleAdd: ${error.toString()}`);
-    return ContentService.createTextOutput(
-      JSON.stringify({ ok: false, error: error.toString() })
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
-}
+        if (existingRow) {
+          console.log(
+            `Property already exists in ${targetSheetName}: ${row.address} - Updating existing row`
+          );
+          try {
+            // Update the existing row instead of skipping
+            const fieldsToUpdate = getFieldsToUpdate(row, targetSheetName);
+            updateRow(
+              targetSheet,
+              existingRow,
+              fieldsToUpdate,
+              targetSheetName
+            );
+            totalUpdated++;
+            console.log(
+              `Successfully updated row ${existingRow} in ${targetSheetName}`
+            );
+          } catch (updateError) {
+            console.log(`Error updating row: ${updateError.message}`);
+            totalSkipped++;
+          }
+          continue;
+        }
 
-function handleRead(sheet, tabName) {
-  try {
-    Logger.log(`Reading from sheet: ${tabName}`);
-
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const rows = data.slice(1).map((row) => {
-      const obj = {};
-      headers.forEach((header, i) => (obj[header] = row[i] || ""));
-      return obj;
-    });
-
-    Logger.log(`Read ${rows.length} rows from ${tabName}`);
-
-    return ContentService.createTextOutput(
-      JSON.stringify({
-        ok: true,
-        rows: rows,
-        count: rows.length,
-        sheet_name: tabName,
-      })
-    ).setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log(`Error in handleRead: ${error.toString()}`);
-    return ContentService.createTextOutput(
-      JSON.stringify({ ok: false, error: error.toString() })
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function handleUpdateRow(sheet, rowData, tabName) {
-  try {
-    Logger.log(`Updating row in sheet: ${tabName}`);
-
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const rows = data.slice(1);
-
-    const addressIndex = headers.indexOf("address");
-    const auctionNameIndex = headers.indexOf("auction_name");
-    const auctionDateIndex = headers.indexOf("auction_date");
-
-    let rowIndex = -1;
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (
-        row[addressIndex] === rowData.address &&
-        row[auctionNameIndex] === rowData.auction_name &&
-        row[auctionDateIndex] === rowData.auction_date
-      ) {
-        rowIndex = i + 1; // Adjust for header
-        break;
+        // Add the new row
+        targetSheet.appendRow(rowData);
+        totalAdded++;
+        console.log(`Added to ${targetSheetName}: ${row.address}`);
+        // Note: Both "estate agent to auction" and "auction opportunity" go to POTENTIAL_TRADES
+      } catch (error) {
+        console.log(`Error processing row: ${error.message}`);
+        totalSkipped++;
       }
     }
 
-    if (rowIndex === -1) {
-      return ContentService.createTextOutput(
-        JSON.stringify({ ok: false, error: "Row not found" })
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const currentRow = rows[rowIndex - 1];
-    const updatedRow = headers.map((header, i) => {
-      switch (header) {
-        case "auction_name":
-          return rowData.auction_name || "";
-        case "auction_date":
-          return rowData.auction_date || "";
-        case "address":
-          return rowData.address || "";
-        case "auction_sale":
-          return rowData.auction_sale || "";
-        case "lot_number":
-          return rowData.lot_number || "";
-        case "postcode":
-          return rowData.postcode || "";
-        case "purchase_price":
-          return rowData.purchase_price || "";
-        case "sold_date":
-          return rowData.sold_date || "";
-        case "owner":
-          return rowData.owner || "";
-        case "guide_price":
-          return rowData.guide_price || "";
-        case "auction_url":
-          return rowData.auction_url || "";
-        case "source_url":
-          return rowData.source_url || "";
-        case "qa_status":
-          return rowData.qa_status || "enriched";
-        case "added_to_potential_trades":
-          return rowData.added_to_potential_trades || "";
-        case "ingested_at":
-          return rowData.ingested_at || new Date().toISOString();
-        default:
-          return currentRow[i] || "";
-      }
-    });
-
-    const range = sheet.getRange(rowIndex + 1, 1, 1, updatedRow.length);
-    range.setValues([updatedRow]);
-
     return ContentService.createTextOutput(
       JSON.stringify({
         ok: true,
-        message: "Row updated successfully",
-        rowIndex: rowIndex,
-        sheet_name: tabName,
-      })
-    ).setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log(`Error in handleUpdateRow: ${error.toString()}`);
-    return ContentService.createTextOutput(
-      JSON.stringify({ ok: false, error: error.toString() })
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function handleDeleteRow(sheet, rowData, tabName) {
-  try {
-    Logger.log(`Deleting row from sheet: ${tabName}`);
-
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const rows = data.slice(1);
-
-    const addressIndex = headers.indexOf("address");
-    const auctionNameIndex = headers.indexOf("auction_name");
-    const auctionDateIndex = headers.indexOf("auction_date");
-
-    let rowIndex = -1;
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (
-        row[addressIndex] === rowData.address &&
-        row[auctionNameIndex] === rowData.auction_name &&
-        row[auctionDateIndex] === rowData.auction_date
-      ) {
-        rowIndex = i + 1; // Adjust for header
-        break;
-      }
-    }
-
-    if (rowIndex === -1) {
-      return ContentService.createTextOutput(
-        JSON.stringify({ ok: false, error: "Row not found" })
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // Delete the row
-    sheet.deleteRow(rowIndex + 1); // +1 because rowIndex is 0-based but deleteRow is 1-based
-
-    return ContentService.createTextOutput(
-      JSON.stringify({
-        ok: true,
-        message: "Row deleted successfully",
-        rowIndex: rowIndex,
-        sheet_name: tabName,
-      })
-    ).setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log(`Error in handleDeleteRow: ${error.toString()}`);
-    return ContentService.createTextOutput(
-      JSON.stringify({ ok: false, error: error.toString() })
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function doGet(e) {
-  try {
-    const ss = SpreadsheetApp.openById(SHEET_ID);
-    const tabName = e.parameter.sheet_name || DEFAULT_TAB_NAME;
-    const sheet = ss.getSheetByName(tabName);
-
-    if (!sheet) {
-      return ContentService.createTextOutput(
-        JSON.stringify({ ok: false, error: `Sheet '${tabName}' not found` })
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const allRows = data.slice(1);
-
-    const offset = parseInt(e.parameter.offset || "0", 10);
-    const limit = parseInt(e.parameter.limit || "100", 10);
-
-    const fromDate = e.parameter.fromDate; // ISO string expected
-    const toDate = e.parameter.toDate;
-
-    const dateColumnIndex = headers.indexOf("auction_date"); // or use ingested_at
-
-    let filteredRows = allRows;
-
-    // Filter by date range if provided
-    if (fromDate || toDate) {
-      filteredRows = filteredRows.filter((row) => {
-        const cellDate = new Date(row[dateColumnIndex]);
-        if (fromDate && new Date(fromDate) > cellDate) return false;
-        if (toDate && new Date(toDate) < cellDate) return false;
-        return true;
-      });
-    }
-
-    const paginatedRows = filteredRows.slice(offset, offset + limit);
-
-    const result = paginatedRows.map((row) => {
-      const obj = {};
-      headers.forEach((header, i) => {
-        obj[header] = row[i] || "";
-      });
-      return obj;
-    });
-
-    return ContentService.createTextOutput(
-      JSON.stringify({
-        ok: true,
-        rows: result,
-        total: filteredRows.length,
-        offset: offset,
-        limit: limit,
-        returned: result.length,
-        sheet_name: tabName,
+        message: `Added ${totalAdded} properties, updated ${totalUpdated}, skipped ${totalSkipped}`,
+        added: totalAdded,
+        updated: totalUpdated,
+        skipped: totalSkipped,
       })
     ).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     return ContentService.createTextOutput(
       JSON.stringify({
         ok: false,
-        error: error.toString(),
+        error: "Error adding data: " + error.toString(),
       })
     ).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
-// Test function to verify sheet names
-function testSheetNames() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheets = ss.getSheets();
+function handleUpdate(data) {
+  try {
+    const sheet = SpreadsheetApp.openById(SHEET_ID);
+    const rows = data.rows || [];
 
-  Logger.log("Available sheets:");
-  for (let i = 0; i < sheets.length; i++) {
-    const sheet = sheets[i];
-    Logger.log(`${i + 1}. ${sheet.getName()}`);
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+
+    for (const row of rows) {
+      try {
+        // Determine which sheet to use based on transaction type and purchase price
+        const transactionType =
+          row.transaction_type || "estate agent to auction";
+        const hasPurchasePrice =
+          row.purchase_price && row.purchase_price.trim() !== "";
+
+        // Route to AUCTIONS_MASTER if:
+        // 1. Transaction type is "auction to auction" (has relevant auction entries), OR
+        // 2. Has purchase price (property prices found)
+        const targetSheetName =
+          transactionType === "auction to auction" || hasPurchasePrice
+            ? SHEET_NAMES.AUCTIONS_MASTER
+            : SHEET_NAMES.POTENTIAL_TRADES;
+        const targetSheet = sheet.getSheetByName(targetSheetName);
+
+        if (!targetSheet) {
+          console.log(`Sheet ${targetSheetName} not found, skipping row`);
+          totalSkipped++;
+          continue;
+        }
+
+        // Find existing row
+        const existingRow = findExistingRow(targetSheet, row);
+
+        if (!existingRow) {
+          console.log(
+            `Property not found in ${targetSheetName}: ${row.address}`
+          );
+          totalSkipped++;
+          continue;
+        }
+
+        // Update the row
+        const fieldsToUpdate = getFieldsToUpdate(row, targetSheetName);
+        updateRow(targetSheet, existingRow, fieldsToUpdate, targetSheetName);
+
+        totalUpdated++;
+        console.log(`Updated in ${targetSheetName}: ${row.address}`);
+        // Note: Properties with purchase prices go to AUCTIONS_MASTER, others go to POTENTIAL_TRADES
+      } catch (error) {
+        console.log(`Error processing row: ${error.message}`);
+        totalSkipped++;
+      }
+    }
+
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: true,
+        message: `Updated ${totalUpdated} properties, skipped ${totalSkipped}`,
+        updated: totalUpdated,
+        skipped: totalSkipped,
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: false,
+        error: "Error updating data: " + error.toString(),
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleRead(data) {
+  try {
+    // Determine which sheet to read from
+    const sheetName = data.sheet_name || SHEET_NAMES.AUCTIONS_MASTER;
+    const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(sheetName);
+
+    if (!sheet) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: `Sheet ${sheetName} not found`,
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const dataRange = sheet.getDataRange();
+    const values = dataRange.getValues();
+
+    if (values.length <= 1) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: true,
+          rows: [],
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const headers = values[0];
+    const rows = [];
+
+    for (let i = 1; i < values.length; i++) {
+      const row = {};
+      for (let j = 0; j < headers.length; j++) {
+        row[headers[j]] = values[i][j];
+      }
+      rows.push(row);
+    }
+
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: true,
+        rows: rows,
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: false,
+        error: "Error reading data: " + error.toString(),
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleUpdateRow(data) {
+  try {
+    const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(
+      SHEET_NAMES.AUCTIONS_MASTER
+    );
+
+    if (!sheet) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: "Sheet not found",
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const rowIndex = data.row_index;
+    const rowData = data.row_data;
+
+    if (rowIndex === undefined || rowIndex === null) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: "row_index is required",
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (!rowData) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: "row_data is required",
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Calculate the actual row number in the sheet (rowIndex is 0-based, sheet rows are 1-based)
+    // Add 2 because: +1 for 1-based indexing, +1 for header row
+    const actualRowNumber = rowIndex + 2;
+
+    // Check if the row exists
+    const lastRow = sheet.getLastRow();
+    if (actualRowNumber > lastRow) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: `Row not found: row_index ${rowIndex} (sheet row ${actualRowNumber}) exceeds last row ${lastRow}`,
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Get the headers to map the data correctly
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0];
+
+    // Create the row data array in the correct order
+    const rowArray = [];
+    for (const header of headers) {
+      rowArray.push(rowData[header] || "");
+    }
+
+    // Update the row
+    const range = sheet.getRange(actualRowNumber, 1, 1, rowArray.length);
+    range.setValues([rowArray]);
+
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: true,
+        message: `Updated row ${actualRowNumber} (index ${rowIndex})`,
+        updated_row: actualRowNumber,
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: false,
+        error: "Error updating row: " + error.toString(),
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleDeleteRow(data) {
+  try {
+    const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(
+      SHEET_NAMES.AUCTIONS_MASTER
+    );
+
+    if (!sheet) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: "Sheet not found",
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const rowIndex = data.row_index;
+
+    if (rowIndex === undefined || rowIndex === null) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: "row_index is required",
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Calculate the actual row number in the sheet (rowIndex is 0-based, sheet rows are 1-based)
+    // Add 2 because: +1 for 1-based indexing, +1 for header row
+    const actualRowToDelete = rowIndex + 2;
+
+    // Check if the row exists
+    const lastRow = sheet.getLastRow();
+    if (actualRowToDelete > lastRow) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          ok: false,
+          error: `Row not found: row_index ${rowIndex} (sheet row ${actualRowToDelete}) exceeds last row ${lastRow}`,
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Delete the row
+    sheet.deleteRow(actualRowToDelete);
+
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: true,
+        message: `Deleted row ${actualRowToDelete} (index ${rowIndex})`,
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        ok: false,
+        error: "Error deleting row: " + error.toString(),
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// Helper function for case-insensitive string comparison
+function normalizeString(str) {
+  if (typeof str !== "string") return "";
+  return str.toLowerCase().trim();
+}
+
+function getHeadersForSheet(sheetName) {
+  // Define headers for each sheet in the correct order
+  if (sheetName === SHEET_NAMES.AUCTIONS_MASTER) {
+    return [
+      "auction_name",
+      "auction_date",
+      "address",
+      "auction_sale",
+      "profit", // NEW FIELD: Calculated profit
+      "lot_number",
+      "postcode",
+      "purchase_price",
+      "sold_date",
+      "transaction_type",
+      "eig_street_history_url",
+      "guide_price",
+      "source_url",
+      "auction_url",
+      "qa_status",
+      "ingested_at",
+    ];
+  } else if (sheetName === SHEET_NAMES.POTENTIAL_TRADES) {
+    return [
+      "auction_name",
+      "auction_date",
+      "address",
+      "auction_sale",
+      "profit", // NEW FIELD: Calculated profit
+      "lot_number",
+      "postcode",
+      "purchase_price",
+      "sold_date",
+      "transaction_type",
+      "eig_street_history_url",
+      "guide_price",
+      "source_url",
+      "auction_url",
+      "added_to_potential_trades",
+      "qa_status",
+      "ingested_at",
+    ];
+  }
+  return [];
+}
+
+function getRowDataForSheet(row, sheetName) {
+  const headers = getHeadersForSheet(sheetName);
+  const rowData = [];
+
+  for (const header of headers) {
+    if (
+      header === "added_to_potential_trades" &&
+      sheetName === SHEET_NAMES.POTENTIAL_TRADES
+    ) {
+      rowData.push("Yes"); // Default value for new entries
+    } else {
+      rowData.push(row[header] || "");
+    }
+  }
+
+  return rowData;
+}
+
+function findExistingRow(sheet, row) {
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const lotNumberCol = headers.indexOf("lot_number");
+  const auctionNameCol = headers.indexOf("auction_name");
+  const auctionDateCol = headers.indexOf("auction_date");
+
+  if (lotNumberCol === -1 || auctionNameCol === -1 || auctionDateCol === -1) {
+    return null;
+  }
+
+  const lotNumber = row.lot_number;
+  const auctionName = row.auction_name;
+  const auctionDate = row.auction_date;
+
+  for (let i = 1; i < data.length; i++) {
+    if (
+      data[i][lotNumberCol] === lotNumber &&
+      data[i][auctionNameCol] === auctionName &&
+      data[i][auctionDateCol] === auctionDate
+    ) {
+      return i + 1; // Return 1-based row number
+    }
+  }
+
+  return null;
+}
+
+function getFieldsToUpdate(row, sheetName) {
+  const headers = getHeadersForSheet(sheetName);
+  const fieldsToUpdate = {};
+
+  for (const header of headers) {
+    if (row.hasOwnProperty(header)) {
+      fieldsToUpdate[header] = row[header];
+    }
+  }
+
+  return fieldsToUpdate;
+}
+
+function updateRow(sheet, rowNum, fieldsToUpdate, sheetName) {
+  const headers = getHeadersForSheet(sheetName);
+
+  for (const [field, value] of Object.entries(fieldsToUpdate)) {
+    const colIndex = headers.indexOf(field);
+    if (colIndex !== -1) {
+      sheet.getRange(rowNum, colIndex + 1).setValue(value);
+    }
   }
 }

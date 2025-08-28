@@ -9,6 +9,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from dotenv import load_dotenv
+from date_formatter import format_date_to_standard
 
 # Load environment variables from .env file
 load_dotenv()
@@ -24,7 +25,7 @@ class PropertyDataManagerWebApp:
             webapp_url: Google Apps Script web app URL
             shared_token: Shared token for authentication
         """
-        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbyq-rzQJCXz3OiDhrHHNoZ-3jrUvTF-5OR9l9QtlyQTVib6rfGN6MOeWXDNlIIhkNAE/exec"
+        self.webapp_url = webapp_url or "https://script.google.com/macros/s/AKfycbxndzoT944wSi9G04vFgTb2hKluq9barafu73NsSgNP_Us80HtCGwrFb1cW7vpD0UVI/exec"
         self.shared_token = shared_token or os.getenv('GOOGLE_SHEETS_SHARED_TOKEN')
         
         # Fallback to local JSON file
@@ -35,6 +36,29 @@ class PropertyDataManagerWebApp:
         print(f"✅ WebApp Property Data Manager initialized")
         print(f"🌐 WebApp URL: {self.webapp_url}")
         print(f"🔐 Shared Token: {self.shared_token[:10] if self.shared_token else 'None'}...")
+    
+    def format_property_dates(self, property_data):
+        """
+        Format all date fields in property data to standard YYYY-MM-DD format
+        
+        Args:
+            property_data: Dictionary containing property information
+            
+        Returns:
+            Dictionary with formatted dates
+        """
+        date_fields = ['auction_date', 'sold_date', 'ingested_at']
+        
+        formatted_data = property_data.copy()
+        for field in date_fields:
+            if field in formatted_data and formatted_data[field]:
+                original_date = formatted_data[field]
+                formatted_date = format_date_to_standard(original_date)
+                if formatted_date != original_date:
+                    print(f"📅 Formatted {field}: {original_date} → {formatted_date}")
+                formatted_data[field] = formatted_date
+        
+        return formatted_data
     
     def load_local_data(self):
         """Load property data from local JSON file"""
@@ -68,6 +92,9 @@ class PropertyDataManagerWebApp:
             Dictionary with status and message
         """
         try:
+            # Format dates to standard YYYY-MM-DD format
+            property_data = self.format_property_dates(property_data)
+            
             # Add timestamp for tracking
             property_data['added_timestamp'] = datetime.now().isoformat()
             
@@ -81,16 +108,20 @@ class PropertyDataManagerWebApp:
                     'auction_date': property_data.get('auction_date', ''),
                     'address': property_data.get('address', ''),
                     'auction_sale': property_data.get('auction_sale', ''),
+                    'profit': property_data.get('profit', ''),  # Calculated profit: auction_sale - purchase_price
                     'lot_number': property_data.get('lot_number', ''),
                     'postcode': property_data.get('postcode', ''),
                     'purchase_price': property_data.get('purchase_price', ''),
                     'sold_date': property_data.get('sold_date', ''),
-                    'owner': '',  # Not provided in our data
+
                     'guide_price': property_data.get('guide_price', '') if property_data.get('guide_price') is not None else '',  # Handle null guide price
                     'auction_url': property_data.get('auction_url', ''),  # New auction_url field
                     'source_url': '',  # Leave source_url empty as requested
                     'qa_status': 'imported',  # Default status
-                    'ingested_at': property_data.get('added_timestamp', datetime.now().isoformat())
+                    'ingested_at': property_data.get('added_timestamp', datetime.now().isoformat()),
+                    # New fields for transaction type and EIG street history
+                    'transaction_type': property_data.get('transaction_type', 'estate agent to auction'),
+                    'eig_street_history_url': property_data.get('eig_street_history_url', '')
                 }]
             }
             
@@ -201,6 +232,76 @@ class PropertyDataManagerWebApp:
         
         # Add the property
         return self.add_property(property_data)
+    
+    def process_property_data_to_tab(self, property_data, tab_name):
+        """
+        Add a property to a specific tab in the Google Sheet via web app
+        
+        Args:
+            property_data: Dictionary containing property information
+            tab_name: Name of the tab to import to (e.g., 'POTENTIAL_TRADES')
+            
+        Returns:
+            Dictionary with status and message
+        """
+        try:
+            # Format dates to standard YYYY-MM-DD format
+            property_data = self.format_property_dates(property_data)
+            
+            # For enriched rows, preserve the original ingested_at timestamp if it exists
+            # Only add new timestamp for new imports
+            if 'ingested_at' not in property_data:
+                property_data['ingested_at'] = datetime.now().isoformat()
+            
+            # Prepare payload for web app in the format expected by the Google Apps Script
+            script_payload = {
+                'token': self.shared_token,
+                'action': 'add',
+                'sheet_name': tab_name,  # Specify the tab name
+                'rows': [{
+                    'auction_name': property_data.get('auction_name', ''),
+                    'auction_date': property_data.get('auction_date', ''),  # Preserve exact format
+                    'address': property_data.get('address', ''),
+                    'auction_sale': property_data.get('auction_sale', ''),
+                    'lot_number': property_data.get('lot_number', ''),
+                    'postcode': property_data.get('postcode', ''),
+                    'purchase_price': property_data.get('purchase_price', ''),  # Preserve exact format
+                    'sold_date': property_data.get('sold_date', ''),  # Preserve exact format
+
+                    'guide_price': property_data.get('guide_price', '') if property_data.get('guide_price') is not None else '',
+                    'auction_url': property_data.get('auction_url', ''),
+                    'source_url': property_data.get('source_url', ''),
+                    'added_to_potential_trades': property_data.get('added_to_potential_trades', ''),
+                    'qa_status': property_data.get('qa_status', 'pending'),
+                    'ingested_at': property_data.get('ingested_at', datetime.now().isoformat()),  # Use original if exists
+                    # New fields for transaction type and EIG street history
+                    'transaction_type': property_data.get('transaction_type', 'estate agent to auction'),
+                    'eig_street_history_url': property_data.get('eig_street_history_url', '')
+                }]
+            }
+            
+            print(f"📤 Sending data to {tab_name} tab via Google Apps Script...")
+            print(f"   Rows count: {len(script_payload['rows'])}")
+            print(f"   First row address: {script_payload['rows'][0].get('address', 'Unknown')}")
+            
+            # Send request to Google Apps Script
+            response = requests.post(self.webapp_url, json=script_payload, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('ok'):
+                    print(f"✅ Successfully added to {tab_name} tab")
+                    return {'status': 'success', 'message': f'Added to {tab_name} tab'}
+                else:
+                    print(f"❌ Failed to add to {tab_name} tab: {result.get('error', 'Unknown error')}")
+                    return {'status': 'error', 'message': result.get('error', 'Unknown error')}
+            else:
+                print(f"❌ HTTP error {response.status_code}: {response.text}")
+                return {'status': 'error', 'message': f'HTTP error {response.status_code}'}
+                
+        except Exception as e:
+            print(f"❌ Error adding to {tab_name} tab: {e}")
+            return {'status': 'error', 'message': str(e)}
     
     def get_all_properties(self):
         """Get all properties from local storage"""
